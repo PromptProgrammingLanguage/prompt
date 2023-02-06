@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::fs::{File,OpenOptions};
 use std::io::Write;
 use clap::{Args,ValueEnum};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use crate::openai::response::OpenAIResponse;
@@ -50,7 +50,7 @@ pub enum SessionError {
 }
 
 impl SessionCommand {
-    pub fn run(&self, client: Client, config_dir: PathBuf) {
+    pub async fn run(&self, client: Client, config_dir: PathBuf) {
 
         if append.is_some() && session.is_none() {
             return Result::Err(SessionError::AppendRequiresSession);
@@ -129,9 +129,12 @@ impl SessionCommand {
                     "temperature": temperature
                 }))
                 .send()
+                .await
                 .expect("Failed to send completion");
 
-            let response: OpenAIResponse::<Response> = res.json().expect("Unknown json response from OpenAI");
+            let response: OpenAIResponse::<Response> = res.json()
+                .await
+                .expect("Unknown json response from OpenAI");
 
             match response {
                 OpenAIResponse::Ok(r) => {

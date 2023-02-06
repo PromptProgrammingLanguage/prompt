@@ -7,13 +7,14 @@ use std::env;
 use std::concat;
 use clap::{Parser,Subcommand};
 use serde::Deserialize;
-use reqwest::blocking::{ClientBuilder};
+use reqwest::ClientBuilder;
 use reqwest::header::{HeaderValue,HeaderMap};
 use dirs;
 use image::ImageCommand;
 use session::SessionCommand;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let cli = Cli::parse();
 
     let config_dir = dirs::config_dir()
@@ -56,13 +57,12 @@ fn main() {
 
     let client = ClientBuilder::new()
         .default_headers(headers)
-        .timeout(None)
         .build()
         .expect("Failed to construct http client");
 
     match cli.command {
-        Commands::Session(session) => session.run(client, config_dir),
-        Commands::Image(image) => image.run(client, config_dir),
+        Commands::Session(session) => session.run(client, config_dir).await,
+        Commands::Image(image) => image.run(client, config_dir).await,
     }
 }
 

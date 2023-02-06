@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 use clap::{Args,ValueEnum};
-use reqwest::blocking::Client;
+use reqwest::Client;
 use serde::Deserialize;
 use serde_json::json;
 use rustc_serialize::base64::FromBase64;
@@ -31,7 +31,7 @@ pub struct ImageCommand {
 }
 
 impl ImageCommand {
-    pub fn run(&self, client: Client, _config_dir: PathBuf) {
+    pub async fn run(&self, client: Client, _config_dir: PathBuf, config: Config) {
         let res = client.post("https://api.openai.com/v1/images/generations")
             .json(&json!({
                 "prompt": &self.prompt,
@@ -50,11 +50,12 @@ impl ImageCommand {
                 }
             }))
             .send()
+            .await
             .expect("Failed to send completion");
 
         let response: OpenAIResponse::<OpenAIImageResponse> = res.json()
+            .await
             .expect("Unknown json response from OpenAI");
-
 
         match response {
             OpenAIResponse::Ok(response) => {
