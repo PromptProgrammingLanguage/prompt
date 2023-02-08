@@ -8,41 +8,53 @@ use serde::Deserialize;
 use serde_json::json;
 use crate::openai::response::OpenAIResponse;
 
-#[derive(Args)]
+#[derive(Args, Default)]
 pub struct SessionCommand {
+    /// Append a new input to an existing session and get only the latest response
+    #[arg(long, short)]
+    pub append: Option<String>,
+
     /// Model to use
     #[arg(value_enum, long, short, default_value_t = Model::TextDavinci)]
-    model: Model,
+    pub model: Model,
 
     /// Temperature of the model on a scale from 0 to 1. 0 is most accurate while 1 is most creative
     #[arg(long, short, default_value_t = 0.0)]
-    temperature: f32,
+    pub temperature: f32,
 
     /// Saves your conversation context using the session name
     #[arg(short, long)]
-    session: Option<String>,
+    pub session: Option<String>,
 
     /// Running conversation wrapper to assist the AI in responding. The current conversation can be
     /// inserted into the wrapper using the {{TRANSCRIPT}} variable. Run ai with the
     /// --print-default-wrappers flag to see examples of what's used for the text and code models.
     #[arg(long)]
-    wrapper: Option<String>,
+    pub wrapper: Option<String>,
 
     /// Disables the context of the conversation, every message sent to the AI is standalone. If you
     /// use a coding model this defaults to true unless wrapper is specified.
     #[arg(long)]
-    no_context: Option<bool>,
+    pub no_context: Option<bool>,
     
     /// Lists the default wrappers for chat models. Useful if you want to start with a template when
     /// writing your own wrapper.
     #[arg(long, default_value_t = false)]
-    print_default_wrappers: bool,
+    pub print_default_wrappers: bool,
+}
+
+pub type SessionResult = Result<Vec<String>, SessionError>;
+
+pub enum SessionError {
+    AppendRequiresSession
 }
 
 impl SessionCommand {
     pub fn run(&self, client: Client, config_dir: PathBuf) {
 
-        let SessionCommand { model, temperature, print_default_wrappers, ref session, .. } = self;
+        if append.is_some() && session.is_none() {
+            return Result::Err(SessionError::AppendRequiresSession);
+        }
 
         let no_context = self.no_context.unwrap_or_else(|| {
             match model {
@@ -89,26 +101,17 @@ impl SessionCommand {
             None
         };
 
-        if *print_default_wrappers {
-            println!(concat!(
-                "\n",
-                "The default wrapper for chat models is:\n",
-                "----------------------------------------\n",
-                "{}\n\n",
-                "________________________________________\n\n",
-                "And the default for code prompts is:\n",
-                "----------------------------------\n\n",
-                "{}\n"),
-                DEFAULT_CHAT_PROMPT_WRAPPER, DEFAULT_CODE_PROMPT_WRAPPER);
-            return;
+        if self.print_default_wrappers {
+            print_default_wrappers();
+            return Result::Ok(vec![]);
         }
 
         print_opening_prompt(&self, &current_transcript);
 
-        let mut line = read_next_user_line();
+        let mut line = append.clone().or_else(|| read_next_user_line());
         match line {
             Some(ref line) => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
-            None => return
+            None => return Result::Ok(vec![]),
         }
 
         loop {
@@ -135,23 +138,28 @@ impl SessionCommand {
                     let text = &r.choices.first().unwrap().text;
                     write_next_line(text, &mut current_transcript, session_file.as_mut());
                     println!("{}", text);
+
+                    if append.is_some() {
+                        return Result::Ok(vec![ text.to_owned() ]);
+                    }
                 },
                 OpenAIResponse::Err(err) => {
-                    println!("Error: {:?}", err.error);
+                    eprintln!("Error: {:?}", err.error);
                 }
             }
 
             line = read_next_user_line();
             match line {
                 Some(ref line) => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
-                None => return
+                None => return Result::Ok(vec![]),
             }
         }
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 pub enum Model {
+    #[default]
     TextDavinci,
     TextCurie,
     TextBabbage,
@@ -205,6 +213,10 @@ pub struct ResponseUsage {
 }
 
 fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
+    if args.append.is_some() {
+        return;
+    }
+
     if session_file.len() > 0 {
         println!("{}", session_file);
     } else {
@@ -215,6 +227,19 @@ fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
             args.temperature
         );
     }
+}
+
+fn print_default_wrappers() {
+    println!(concat!(
+        "\n",
+        "The default wrapper for chat models is:\n",
+        "----------------------------------------\n",
+        "{}\n\n",
+        "________________________________________\n\n",
+        "And the default for code prompts is:\n",
+        "----------------------------------\n\n",
+        "{}\n"),
+        DEFAULT_CHAT_PROMPT_WRAPPER, DEFAULT_CODE_PROMPT_WRAPPER);
 }
 
 fn read_next_user_line() -> Option<String> {
