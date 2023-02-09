@@ -31,7 +31,7 @@ pub struct ImageCommand {
 }
 
 impl ImageCommand {
-    pub async fn run(&self, client: Client, _config_dir: PathBuf, config: Config) {
+    pub async fn run(&self, client: Client) {
         let res = client.post("https://api.openai.com/v1/images/generations")
             .json(&json!({
                 "prompt": &self.prompt,

@@ -61,8 +61,8 @@ async fn main() {
         .expect("Failed to construct http client");
 
     match cli.command {
-        Commands::Session(session) => session.run(client, config_dir).await,
-        Commands::Image(image) => image.run(client, config_dir).await,
+        Commands::Session(session) => { session.run(&client, config_dir).await; }
+        Commands::Image(image) => image.run(client).await,
     }
 }
 

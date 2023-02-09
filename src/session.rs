@@ -4,12 +4,16 @@ use std::fs::{File,OpenOptions};
 use std::io::Write;
 use clap::{Args,ValueEnum};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Serialize,Deserialize};
 use serde_json::json;
 use crate::openai::response::OpenAIResponse;
 
 #[derive(Args, Default)]
 pub struct SessionCommand {
+    /// Allow the AI to generate a response to the prompt before user input
+    #[arg(long)]
+    pub ai_responds_first: bool,
+
     /// Append a new input to an existing session and get only the latest response
     #[arg(long, short)]
     pub append: Option<String>,
@@ -24,58 +28,42 @@ pub struct SessionCommand {
 
     /// Saves your conversation context using the session name
     #[arg(short, long)]
-    pub session: Option<String>,
+    pub name: Option<String>,
 
-    /// Running conversation wrapper to assist the AI in responding. The current conversation can be
-    /// inserted into the wrapper using the {{TRANSCRIPT}} variable. Run ai with the
-    /// --print-default-wrappers flag to see examples of what's used for the text and code models.
+    /// Running conversation prompt to assist the AI in responding. The current conversation can be
+    /// inserted into the prompt using the ${TRANSCRIPT} variable. Run ai with the
+    /// --print-default-prompts flag to see examples of what's used for the text and code models.
     #[arg(long)]
-    pub wrapper: Option<String>,
+    pub prompt: Option<PathBuf>,
 
     /// Disables the context of the conversation, every message sent to the AI is standalone. If you
-    /// use a coding model this defaults to true unless wrapper is specified.
+    /// use a coding model this defaults to true unless prompt is specified.
     #[arg(long)]
     pub no_context: Option<bool>,
     
-    /// Lists the default wrappers for chat models. Useful if you want to start with a template when
-    /// writing your own wrapper.
+    /// Lists the default prompts for chat models. Useful if you want to start with a template when
+    /// writing your own prompt.
     #[arg(long, default_value_t = false)]
-    pub print_default_wrappers: bool,
+    pub print_default_prompts: bool,
 }
 
 pub type SessionResult = Result<Vec<String>, SessionError>;
 
+#[derive(Clone, Serialize, Deserialize)]
 pub enum SessionError {
     AppendRequiresSession
 }
 
 impl SessionCommand {
-    pub async fn run(&self, client: Client, config_dir: PathBuf) {
+    pub async fn run(&self, client: &Client, config_dir: PathBuf) -> SessionResult {
+        let SessionCommand { append, ref name, model, temperature, .. } = self;
 
-        if append.is_some() && session.is_none() {
+        if append.is_some() && name.is_none() {
             return Result::Err(SessionError::AppendRequiresSession);
         }
 
-        let no_context = self.no_context.unwrap_or_else(|| {
-            match model {
-                Model::TextDavinci |
-                Model::TextCurie |
-                Model::TextBabbage |
-                Model::TextAda => false,
-                Model::CodeDavinci |
-                Model::CodeCushman => true
-            }
-        });
-        let wrapper = self.wrapper.clone().unwrap_or_else(|| {
-            match model {
-                Model::TextDavinci |
-                Model::TextCurie |
-                Model::TextBabbage |
-                Model::TextAda => DEFAULT_CHAT_PROMPT_WRAPPER.to_owned(),
-                Model::CodeDavinci |
-                Model::CodeCushman => DEFAULT_CODE_PROMPT_WRAPPER.to_owned()
-            }
-        });
+        let no_context = self.parse_no_context();
+        let prompt = self.parse_prompt();
         let session_dir = {
             let mut dir = config_dir.clone();
             dir.push("sessions");
@@ -83,7 +71,7 @@ impl SessionCommand {
         };
         fs::create_dir_all(&session_dir).expect("Config directory could not be created");
         let mut current_transcript = String::new();
-        let mut session_file: Option<File> = if let Some(name) = session {
+        let mut session_file: Option<File> = if let Some(name) = name {
             let path = {
                 let mut path = session_dir.clone();
                 path.push(name);
@@ -101,24 +89,31 @@ impl SessionCommand {
             None
         };
 
-        if self.print_default_wrappers {
-            print_default_wrappers();
+        if self.print_default_prompts {
+            print_default_prompts();
             return Result::Ok(vec![]);
         }
 
         print_opening_prompt(&self, &current_transcript);
 
-        let mut line = append.clone().or_else(|| read_next_user_line());
-        match line {
-            Some(ref line) => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
-            None => return Result::Ok(vec![]),
-        }
+        let mut line = if !self.ai_responds_first {
+            let line = append.clone().or_else(|| read_next_user_line());
+            match line {
+                Some(ref line) =>
+                    write_next_line(&line, &mut current_transcript, session_file.as_mut()),
+
+                None => return Result::Ok(vec![]),
+            }
+            line
+        } else {
+            Some(String::new())
+        };
 
         loop {
             let prompt = if no_context {
                 line.unwrap()
             } else {
-                wrapper.replace("{{TRANSCRIPT}}", &current_transcript)
+                prompt.replace("${TRANSCRIPT}", &current_transcript)
             };
 
             let res = client.post("https://api.openai.com/v1/completions")
@@ -158,6 +153,36 @@ impl SessionCommand {
             }
         }
     }
+
+    pub fn parse_no_context(&self) -> bool {
+        self.no_context.unwrap_or_else(|| {
+            match self.model {
+                Model::TextDavinci |
+                Model::TextCurie |
+                Model::TextBabbage |
+                Model::TextAda => false,
+                Model::CodeDavinci |
+                Model::CodeCushman => true
+            }
+        })
+    }
+
+    pub fn parse_prompt(&self) -> String {
+        self.prompt.clone()
+            .and_then(|path| {
+                std::fs::read_to_string(path).ok()
+            })
+            .unwrap_or_else(|| {
+                match self.model {
+                    Model::TextDavinci |
+                    Model::TextCurie |
+                    Model::TextBabbage |
+                    Model::TextAda => DEFAULT_CHAT_PROMPT_WRAPPER.to_owned(),
+                    Model::CodeDavinci |
+                    Model::CodeCushman => DEFAULT_CODE_PROMPT_WRAPPER.to_owned()
+                }
+            })
+    }
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
@@ -183,17 +208,6 @@ impl Model {
         }
     }
 }
-
-const DEFAULT_CODE_PROMPT_WRAPPER: &str = "{{TRANSCRIPT}}";
-const DEFAULT_CHAT_PROMPT_WRAPPER: &str = "
-The following is a transcript between a helpful AI assistant and a human. The AI assistant can provide factual information (but only from before mid 2021, when its training data cuts off), ask clarifying questions, and engage in chit chat.
-
-Transcript:
-
-{{TRANSCRIPT}}
-
-Output the next thing the AI says:
-";
 
 #[derive(Deserialize)]
 pub struct Response {
@@ -223,19 +237,32 @@ fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
     if session_file.len() > 0 {
         println!("{}", session_file);
     } else {
-        println!(concat!("\n",
-            "Hello, I'm ChatGPT using the model: {} with a temperature of {}. ",
-            "Ask me anything."),
-            args.model.to_possible_value().unwrap().get_name(),
-            args.temperature
-        );
+        match &args.prompt {
+            Some(_) => {
+                println!(concat!(
+                    "\nHello, I'm ChatGPT using the model: {} with a temperature of {}. ",
+                    "The prompt used is:\n\n"),
+                    args.model.to_possible_value().unwrap().get_name(),
+                    args.temperature
+                );
+                println!("\nWith prompt:\n {}", args.parse_prompt().replace("${TRANSCRIPT}", ""));
+            },
+            None => {
+                println!(concat!("\n",
+                    "Hello, I'm ChatGPT using the model: {} with a temperature of {}. ",
+                    "Ask me anything."),
+                    args.model.to_possible_value().unwrap().get_name(),
+                    args.temperature
+                );
+            }
+        }
     }
 }
 
-fn print_default_wrappers() {
+fn print_default_prompts() {
     println!(concat!(
         "\n",
-        "The default wrapper for chat models is:\n",
+        "The default prompt for chat models is:\n",
         "----------------------------------------\n",
         "{}\n\n",
         "________________________________________\n\n",
@@ -261,3 +288,14 @@ fn write_next_line(line: &str, transcript: &mut String, mut session_file: Option
     }
     *transcript += line;
 }
+
+const DEFAULT_CODE_PROMPT_WRAPPER: &str = "${TRANSCRIPT}";
+const DEFAULT_CHAT_PROMPT_WRAPPER: &str = "
+The following is a transcript between a helpful AI assistant and a human. The AI assistant can provide factual information (but only from before mid 2021, when its training data cuts off), ask clarifying questions, and engage in chit chat.
+
+Transcript:
+
+${TRANSCRIPT}
+
+Output the next thing the AI says:
+";
