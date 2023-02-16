@@ -8,15 +8,22 @@ use serde::{Serialize,Deserialize};
 use serde_json::json;
 use crate::openai::response::OpenAIResponse;
 
-#[derive(Args, Default)]
+#[derive(Args, Clone, Default, Debug)]
 pub struct SessionCommand {
     /// Allow the AI to generate a response to the prompt before user input
     #[arg(long)]
     pub ai_responds_first: bool,
 
-    /// Append a new input to an existing session and get only the latest response
-    #[arg(long, short)]
-    pub append: Option<String>,
+    /// Append a new input to an existing session and get only the latest response. If
+    /// ai-responds-first is set to true then only the ai response is included.
+    #[arg(long, default_value_t = false)]
+    pub append: bool,
+
+    /// Append a string to an existing session and get only the latest response. This is the same as
+    /// the "append" cli argument but it takes a string directly instead of blocking to wait for
+    /// user input.
+    #[arg(long)]
+    pub append_string: Option<String>,
 
     /// Model to use
     #[arg(value_enum, long, short, default_value_t = Model::TextDavinci)]
@@ -30,11 +37,19 @@ pub struct SessionCommand {
     #[arg(short, long)]
     pub name: Option<String>,
 
+    /// Overwrite the existing session if it already exists
+    #[arg(long, default_value_t = false)]
+    pub overwrite: bool,
+
     /// Running conversation prompt to assist the AI in responding. The current conversation can be
     /// inserted into the prompt using the ${TRANSCRIPT} variable. Run ai with the
     /// --print-default-prompts flag to see examples of what's used for the text and code models.
     #[arg(long)]
-    pub prompt: Option<PathBuf>,
+    pub prompt: Option<String>,
+
+    /// Path to a prompt file to load. See prompt option for details.
+    #[arg(long)]
+    pub prompt_path: Option<PathBuf>,
 
     /// Disables the context of the conversation, every message sent to the AI is standalone. If you
     /// use a coding model this defaults to true unless prompt is specified.
@@ -45,22 +60,32 @@ pub struct SessionCommand {
     /// writing your own prompt.
     #[arg(long, default_value_t = false)]
     pub print_default_prompts: bool,
+
+    /// Number of responses to generate
+    pub response_count: Option<usize>,
+
+    /// Only write output the session file
+    #[arg(long, default_value_t = false)]
+    pub quiet: bool,
 }
 
 pub type SessionResult = Result<Vec<String>, SessionError>;
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum SessionError {
-    AppendRequiresSession
+    AppendRequiresSession,
+    AppendsClash,
+    AppendAndAiRespondsFirstIsNonsensical,
+    QuietRequiresSession,
+    OverwriteRequiresSession,
+    ZeroResponseCountIsNonsensical
 }
 
 impl SessionCommand {
     pub async fn run(&self, client: &Client, config_dir: PathBuf) -> SessionResult {
-        let SessionCommand { append, ref name, model, temperature, .. } = self;
+        let SessionCommand { ref name, model, temperature, .. } = self;
 
-        if append.is_some() && name.is_none() {
-            return Result::Err(SessionError::AppendRequiresSession);
-        }
+        self.validate()?;
 
         let no_context = self.parse_no_context();
         let prompt = self.parse_prompt();
@@ -70,6 +95,20 @@ impl SessionCommand {
             dir
         };
         fs::create_dir_all(&session_dir).expect("Config directory could not be created");
+
+        if self.overwrite {
+            let path = {
+                let mut path = session_dir.clone();
+                path.push(name.as_ref().unwrap());
+                path
+            };
+            let mut file = OpenOptions::new().write(true).truncate(true).open(path);
+            if let Ok(mut session_file) = file {
+                session_file.write_all(b"").expect("Unable to write to session file");
+                session_file.flush().expect("Unable to write to session file");
+            }
+        }
+
         let mut current_transcript = String::new();
         let mut session_file: Option<File> = if let Some(name) = name {
             let path = {
@@ -91,18 +130,18 @@ impl SessionCommand {
 
         if self.print_default_prompts {
             print_default_prompts();
-            return Result::Ok(vec![]);
+            return Ok(vec![]);
         }
 
         print_opening_prompt(&self, &current_transcript);
 
         let mut line = if !self.ai_responds_first {
-            let line = append.clone().or_else(|| read_next_user_line());
+            let line = self.append_string.clone().or_else(|| read_next_user_line());
             match line {
                 Some(ref line) =>
                     write_next_line(&line, &mut current_transcript, session_file.as_mut()),
 
-                None => return Result::Ok(vec![]),
+                None => return Ok(vec![]),
             }
             line
         } else {
@@ -121,7 +160,8 @@ impl SessionCommand {
                     "model": model.to_versioned(), 
                     "prompt": &prompt,
                     "max_tokens": 1000,
-                    "temperature": temperature
+                    "temperature": temperature,
+                    "n": self.response_count.unwrap_or(1)
                 }))
                 .send()
                 .await
@@ -134,11 +174,20 @@ impl SessionCommand {
             match response {
                 OpenAIResponse::Ok(r) => {
                     let text = &r.choices.first().unwrap().text;
-                    write_next_line(text, &mut current_transcript, session_file.as_mut());
-                    println!("{}", text);
 
-                    if append.is_some() {
-                        return Result::Ok(vec![ text.to_owned() ]);
+                    if let Some(count) = self.response_count {
+                        if count > 1 {
+                            return Ok(r.choices.into_iter().map(|j| j.text).collect());
+                        }
+                    }
+
+                    write_next_line(text, &mut current_transcript, session_file.as_mut());
+                    if !self.quiet {
+                        println!("{}", text);
+                    }
+
+                    if self.append || self.append_string.is_some() {
+                        return Ok(vec![ text.to_owned() ]);
                     }
                 },
                 OpenAIResponse::Err(err) => {
@@ -149,9 +198,41 @@ impl SessionCommand {
             line = read_next_user_line();
             match line {
                 Some(ref line) => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
-                None => return Result::Ok(vec![]),
+                None => return Ok(vec![]),
             }
         }
+    }
+
+    fn validate(&self) -> Result<(), SessionError> {
+        if self.name.is_none() {
+            if self.append {
+                return Err(SessionError::AppendRequiresSession);
+            }
+
+            if self.overwrite {
+                return Err(SessionError::OverwriteRequiresSession);
+            }
+
+            if self.quiet {
+                return Err(SessionError::QuietRequiresSession);
+            }
+        }
+
+        if self.append_string.is_some() && self.append {
+            return Err(SessionError::AppendsClash);
+        }
+
+        if self.ai_responds_first && self.append_string.is_some() {
+            return Err(SessionError::AppendAndAiRespondsFirstIsNonsensical);
+        }
+
+        if let Some(count) = self.response_count {
+            if count == 0 {
+                return Err(SessionError::ZeroResponseCountIsNonsensical);
+            }
+        }
+
+        Ok(())
     }
 
     pub fn parse_no_context(&self) -> bool {
@@ -168,9 +249,14 @@ impl SessionCommand {
     }
 
     pub fn parse_prompt(&self) -> String {
-        self.prompt.clone()
-            .and_then(|path| {
-                std::fs::read_to_string(path).ok()
+        self.prompt
+            .clone()
+            .or_else(|| {
+                self.prompt_path
+                    .clone()
+                    .and_then(|path| {
+                        std::fs::read_to_string(path).ok()
+                    })
             })
             .unwrap_or_else(|| {
                 match self.model {
@@ -230,7 +316,11 @@ pub struct ResponseUsage {
 }
 
 fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
-    if args.append.is_some() {
+    if args.append {
+        return;
+    }
+
+    if args.quiet {
         return;
     }
 
