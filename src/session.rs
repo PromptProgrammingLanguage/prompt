@@ -8,7 +8,7 @@ use serde::{Serialize,Deserialize};
 use serde_json::json;
 use crate::openai::response::OpenAIResponse;
 
-#[derive(Args, Clone, Default, Debug)]
+#[derive(Args, Clone, Debug)]
 pub struct SessionCommand {
     /// Allow the AI to generate a response to the prompt before user input
     #[arg(long)]
@@ -16,7 +16,7 @@ pub struct SessionCommand {
 
     /// Append a new input to an existing session and get only the latest response. If
     /// ai-responds-first is set to true then only the ai response is included.
-    #[arg(long, default_value_t = false)]
+    #[arg(long)]
     pub append: bool,
 
     /// Append a string to an existing session and get only the latest response. This is the same as
@@ -26,11 +26,11 @@ pub struct SessionCommand {
     pub append_string: Option<String>,
 
     /// Model to use
-    #[arg(value_enum, long, short, default_value_t = Model::TextDavinci)]
+    #[arg(value_enum, long, short)]
     pub model: Model,
 
     /// Temperature of the model on a scale from 0 to 1. 0 is most accurate while 1 is most creative
-    #[arg(long, short, default_value_t = 0.0)]
+    #[arg(long, short)]
     pub temperature: f32,
 
     /// Saves your conversation context using the session name
@@ -38,7 +38,7 @@ pub struct SessionCommand {
     pub name: Option<String>,
 
     /// Overwrite the existing session if it already exists
-    #[arg(long, default_value_t = false)]
+    #[arg(long)]
     pub overwrite: bool,
 
     /// Running conversation prompt to assist the AI in responding. The current conversation can be
@@ -58,15 +58,35 @@ pub struct SessionCommand {
     
     /// Lists the default prompts for chat models. Useful if you want to start with a template when
     /// writing your own prompt.
-    #[arg(long, default_value_t = false)]
+    #[arg(long)]
     pub print_default_prompts: bool,
 
     /// Number of responses to generate
     pub response_count: Option<usize>,
 
     /// Only write output the session file
-    #[arg(long, default_value_t = false)]
+    #[arg(long)]
     pub quiet: bool,
+}
+
+impl Default for SessionCommand {
+    fn default() -> Self {
+        SessionCommand {
+            ai_responds_first: false,
+            append: false,
+            append_string: None,
+            model: Model::default(),
+            temperature: 0.8,
+            name: None,
+            overwrite: false,
+            prompt: None,
+            prompt_path: None,
+            no_context: None,
+            print_default_prompts: false,
+            response_count: None,
+            quiet: false
+        }
+    }
 }
 
 pub type SessionResult = Result<Vec<String>, SessionError>;
@@ -102,7 +122,7 @@ impl SessionCommand {
                 path.push(name.as_ref().unwrap());
                 path
             };
-            let mut file = OpenOptions::new().write(true).truncate(true).open(path);
+            let file = OpenOptions::new().write(true).truncate(true).open(path);
             if let Ok(mut session_file) = file {
                 session_file.write_all(b"").expect("Unable to write to session file");
                 session_file.flush().expect("Unable to write to session file");
