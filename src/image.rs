@@ -1,37 +1,59 @@
+use core::convert::{TryFrom,TryInto};
 use std::fs;
 use std::path::PathBuf;
 use clap::{Args,ValueEnum};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize,Serialize};
 use serde_json::json;
 use rustc_serialize::base64::FromBase64;
-use crate::openai::response::OpenAIResponse;
+use derive_more::{From,TryInto};
+use crate::openai::response::{OpenAIResponse,OpenAIError};
 
-#[derive(Args)]
+#[derive(Clone, Debug, Args)]
 pub struct ImageCommand {
     /// Description of the image
     #[arg(long, short)]
-    prompt: String,
+    pub prompt: String,
 
     /// Number of images generated
-    #[arg(long, short, default_value_t = 1)]
-    count: usize,
+    #[arg(long, short)]
+    pub count: usize,
 
     /// Generated image size
-    #[arg(value_enum, long, short, default_value_t = PictureSize::x512)]
-    size: PictureSize,
+    #[arg(value_enum, long, short)]
+    pub size: PictureSize,
 
     /// Format of the response
-    #[arg(value_enum, long, short, default_value_t = PictureFormat::Url)]
-    format: PictureFormat,
+    #[arg(value_enum, long, short)]
+    pub format: PictureFormat,
 
     /// Directory to output files
     #[arg(value_enum, long, short)]
-    out: Option<PathBuf>,
+    pub out: Option<PathBuf>,
+}
+
+impl Default for ImageCommand {
+    fn default() -> Self {
+        Self {
+            prompt: String::new(),
+            count: 1,
+            size: PictureSize::default(),
+            format: PictureFormat::default(),
+            out: None
+        }
+    }
+}
+
+pub type ImageResult = Result<Vec<ImageData>, ImageError>;
+
+#[derive(Clone, Debug, From, Serialize, Deserialize)]
+pub enum ImageError {
+    OpenAIError(OpenAIError),
+    Hum
 }
 
 impl ImageCommand {
-    pub async fn run(&self, client: Client) {
+    pub async fn run(&self, client: &Client) -> ImageResult {
         let res = client.post("https://api.openai.com/v1/images/generations")
             .json(&json!({
                 "prompt": &self.prompt,
@@ -57,32 +79,33 @@ impl ImageCommand {
             .await
             .expect("Unknown json response from OpenAI");
 
-        match response {
-            OpenAIResponse::Ok(response) => {
-                match self.out {
-                    Some(ref out) => {
-                        fs::create_dir_all(&out)
-                            .expect(r#"Image "out" directory could not be created"#);
-
-                        for (i, data) in response.data.iter().enumerate() {
-                            match data {
-                                OpenAIImageData::Url(_) => unreachable!(
-                                    "Response data should be in binary format"),
-
-                                OpenAIImageData::Binary(data) => {
-                                    let content = data.b64_json.from_base64().unwrap();
-                                    let mut path = out.clone();
-                                    path.push(format!("{}.png", i));
-
-                                    fs::write(path, content).unwrap();
-                                }
-                            }
-                        }
-                    },
-                    None => {}
-                }
+        match (&self.out, response) {
+            (Some(out), OpenAIResponse::Ok(response)) => {
+                write_data_to_directory(out, &response);
+                Ok(response.data)
             },
-            OpenAIResponse::Err(_) => {}
+            (None, OpenAIResponse::Ok(response)) => Ok(response.data),
+            (_, OpenAIResponse::Err(e)) => Err(e.error.into())
+        }
+    }
+}
+
+fn write_data_to_directory(out: &PathBuf, response: &OpenAIImageResponse) {
+    fs::create_dir_all(&out)
+        .expect(r#"Image "out" directory could not be created"#);
+
+    for (i, data) in response.data.iter().enumerate() {
+        match data {
+            ImageData::Url(_) => unreachable!(
+                "Response data should be in binary format"),
+
+            ImageData::Binary(data) => {
+                let content = data.b64_json.from_base64().unwrap();
+                let mut path = out.clone();
+                path.push(format!("{}.png", i));
+
+                fs::write(path, content).unwrap();
+            }
         }
     }
 }
@@ -90,36 +113,39 @@ impl ImageCommand {
 #[derive(Deserialize, Debug)]
 pub struct OpenAIImageResponse {
     pub created: usize,
-    pub data: Vec<OpenAIImageData>
+    pub data: Vec<ImageData>
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Clone, From, TryInto, Serialize, Deserialize, Debug)]
 #[serde(untagged)]
-pub enum OpenAIImageData {
-    Url(OpenAIImageUrl),
-    Binary(OpenAIImageBinary),
+#[try_into(owned, ref, ref_mut)]
+pub enum ImageData {
+    Url(ImageUrl),
+    Binary(ImageBinary),
 }
 
-#[derive(Deserialize, Debug)]
-pub struct OpenAIImageUrl {
+#[derive(Clone, Default, Serialize, Deserialize, Debug)]
+pub struct ImageUrl {
     pub url: String
 }
 
-#[derive(Deserialize, Debug)]
-pub struct OpenAIImageBinary {
+#[derive(Clone, Serialize, Deserialize, Debug)]
+pub struct ImageBinary {
     pub b64_json: String
 }
 
-#[derive(Copy, Clone, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[derive(Default, Copy, Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
 #[allow(non_camel_case_types)]
-enum PictureSize {
+pub enum PictureSize {
     x256,
+    #[default]
     x512,
     x1024
 }
 
-#[derive(Copy, Clone, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-enum PictureFormat {
+#[derive(Default, Copy, Clone, Serialize, Deserialize, Debug, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+pub enum PictureFormat {
+    #[default]
     Url,
     Binary
 }

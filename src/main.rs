@@ -1,3 +1,5 @@
+extern crate derive_more;
+
 mod image;
 mod session;
 mod openai;
@@ -10,7 +12,7 @@ use serde::Deserialize;
 use reqwest::ClientBuilder;
 use reqwest::header::{HeaderValue,HeaderMap};
 use dirs;
-use image::ImageCommand;
+use image::{ImageCommand,PictureFormat};
 use session::SessionCommand;
 
 #[tokio::main]
@@ -61,8 +63,28 @@ async fn main() {
         .expect("Failed to construct http client");
 
     match cli.command {
-        Commands::Session(session) => { session.run(&client, config_dir).await; }
-        Commands::Image(image) => image.run(client).await,
+        Commands::Session(session) => {
+            let result = session.run(&client, config_dir).await;
+            if let Err(e) = result {
+                eprintln!("{:?}", e);
+            }
+        },
+        Commands::Image(image) => {
+            let result = image.run(&client).await;
+
+            match (result, image.out, image.format) {
+                (Ok(result), None, _p @ PictureFormat::Url) => {
+                    println!("{}", serde_json::to_string(&result)
+                        .expect(&concat!(
+                            "Image response could not be serialized to JSON. Did the AI providers ",
+                            "API change?")));
+                },
+                (Err(e), _, _) => {
+                    eprintln!("{:?}", e);
+                },
+                _ => {}
+            }
+        }
     }
 }
 

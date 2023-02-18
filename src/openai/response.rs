@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize,Serialize};
 
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -7,12 +7,12 @@ pub enum OpenAIResponse<T> {
     Err(OpenAIErrorResponse),
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct OpenAIErrorResponse {
     pub error: OpenAIError
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct OpenAIError {
     pub message: String,
     pub r#type: String,
