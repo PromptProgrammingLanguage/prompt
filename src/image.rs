@@ -16,15 +16,15 @@ pub struct ImageCommand {
     pub prompt: String,
 
     /// Number of images generated
-    #[arg(long, short)]
+    #[arg(long, short, default_value_t = ImageCommand::default().count)]
     pub count: usize,
 
     /// Generated image size
-    #[arg(value_enum, long, short)]
+    #[arg(value_enum, long, short, default_value_t = PictureSize::default())]
     pub size: PictureSize,
 
     /// Format of the response
-    #[arg(value_enum, long, short)]
+    #[arg(value_enum, long, short, default_value_t = PictureFormat::default())]
     pub format: PictureFormat,
 
     /// Directory to output files

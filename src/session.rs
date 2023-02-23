@@ -26,11 +26,11 @@ pub struct SessionCommand {
     pub append_string: Option<String>,
 
     /// Model to use
-    #[arg(value_enum, long, short)]
+    #[arg(value_enum, long, short, default_value_t = SessionCommand::default().model)]
     pub model: Model,
 
     /// Temperature of the model on a scale from 0 to 1. 0 is most accurate while 1 is most creative
-    #[arg(long, short)]
+    #[arg(long, short, default_value_t = SessionCommand::default().temperature)]
     pub temperature: f32,
 
     /// Saves your conversation context using the session name
