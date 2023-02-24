@@ -87,7 +87,8 @@ pub struct SessionCommand {
     #[arg(long)]
     pub prefix_ai: Option<String>,
 
-    // Number of responses to generate
+    /// Number of responses to generate
+    #[arg(skip)]
     pub response_count: Option<usize>,
 }
 
