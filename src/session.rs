@@ -5,8 +5,10 @@ use std::io::Write;
 use clap::{Args,ValueEnum};
 use reqwest::Client;
 use serde::{Serialize,Deserialize};
-use serde_json::json;
-use crate::openai::response::OpenAIResponse;
+use crate::openai::session::{OpenAISessionCommand};
+use crate::openai::response::OpenAIError;
+use crate::cohere::session::{CohereSessionCommand,CohereError};
+use crate::Config;
 
 #[derive(Args, Clone, Debug)]
 pub struct SessionCommand {
@@ -25,9 +27,13 @@ pub struct SessionCommand {
     #[arg(long)]
     pub append_string: Option<String>,
 
-    /// Model to use
+    /// Model size
     #[arg(value_enum, long, short, default_value_t = SessionCommand::default().model)]
     pub model: Model,
+
+    /// Model focus
+    #[arg(value_enum, long, default_value_t = SessionCommand::default().model_focus)]
+    pub model_focus: ModelFocus,
 
     /// Temperature of the model on a scale from 0 to 1. 0 is most accurate while 1 is most creative
     #[arg(long, short, default_value_t = SessionCommand::default().temperature)]
@@ -61,12 +67,28 @@ pub struct SessionCommand {
     #[arg(long)]
     pub print_default_prompts: bool,
 
-    /// Number of responses to generate
-    pub response_count: Option<usize>,
-
     /// Only write output the session file
     #[arg(long)]
     pub quiet: bool,
+
+    /// Provider for the session service
+    #[arg(value_enum, long, default_value_t = SessionCommand::default().provider)]
+    pub provider: Provider,
+
+    /// Prefix input with the supplied string. This can be used for labels if your prompt has a
+    /// conversational style. If you're using the default chat prompt then this defaults to
+    /// "HUMAN: ", otherwise it's an empty string.
+    #[arg(long)]
+    pub prefix_user: Option<String>,
+
+    /// Prefix ai responses with the supplied string. This can be used for labels if your prompt has
+    /// a conversational style. If you're using the default chat prompt then this defaults to
+    /// "AI: ", otherwise it's an empty string.
+    #[arg(long)]
+    pub prefix_ai: Option<String>,
+
+    // Number of responses to generate
+    pub response_count: Option<usize>,
 }
 
 impl Default for SessionCommand {
@@ -76,6 +98,7 @@ impl Default for SessionCommand {
             append: false,
             append_string: None,
             model: Model::default(),
+            model_focus: ModelFocus::default(),
             temperature: 0.8,
             name: None,
             overwrite: false,
@@ -84,10 +107,14 @@ impl Default for SessionCommand {
             no_context: None,
             print_default_prompts: false,
             response_count: None,
-            quiet: false
+            quiet: false,
+            provider: Provider::default(),
+            prefix_ai: None,
+            prefix_user: None
         }
     }
 }
+
 
 pub type SessionResult = Result<Vec<String>, SessionError>;
 
@@ -97,20 +124,33 @@ pub enum SessionError {
     AppendsClash,
     AppendAndAiRespondsFirstIsNonsensical,
     QuietRequiresSession,
+    NoMatchingModel,
     OverwriteRequiresSession,
-    ZeroResponseCountIsNonsensical
+    TemperatureOutOfValidRange,
+    ZeroResponseCountIsNonsensical,
+    CohereError(CohereError),
+    OpenAIError(OpenAIError)
 }
 
 impl SessionCommand {
-    pub async fn run(&self, client: &Client, config_dir: PathBuf) -> SessionResult {
-        let SessionCommand { ref name, model, temperature, .. } = self;
+    pub async fn run(&self, client: &Client, config: &Config) -> SessionResult {
+        let SessionCommand { ref name, .. } = self;
 
         self.validate()?;
 
         let no_context = self.parse_no_context();
         let prompt = self.parse_prompt();
+        let prefix_user = self.prefix_user.clone().or_else(|| match &*prompt {
+            DEFAULT_CHAT_PROMPT_WRAPPER => Some(String::from("HUMAN: ")),
+            _ => None
+        });
+        let prefix_ai = self.prefix_ai.clone().or_else(|| match &*prompt {
+            DEFAULT_CHAT_PROMPT_WRAPPER => Some(String::from("AI: ")),
+            _ => None
+        });
+
         let session_dir = {
-            let mut dir = config_dir.clone();
+            let mut dir = config.dir.clone();
             dir.push("sessions");
             dir
         };
@@ -153,14 +193,25 @@ impl SessionCommand {
             return Ok(vec![]);
         }
 
+        // The commands need to be instantiated before printing the opening prompt because they can
+        // print warnings about mismatched options without failing.
+        let command = match self.provider {
+            Provider::OpenAI => Ok(OpenAISessionCommand::try_from(self)?),
+            Provider::Cohere => Err(CohereSessionCommand::try_from(self)?),
+        };
+
         print_opening_prompt(&self, &current_transcript);
 
         let mut line = if !self.ai_responds_first {
             let line = self.append_string.clone().or_else(|| read_next_user_line());
             match line {
-                Some(ref line) =>
-                    write_next_line(&line, &mut current_transcript, session_file.as_mut()),
-
+                Some(ref line) => match &prefix_user {
+                    None => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
+                    Some(prefix) => {
+                        let combined = format!("{}{}", prefix, line);
+                        write_next_line(&combined, &mut current_transcript, session_file.as_mut());
+                    },
+                },
                 None => return Ok(vec![]),
             }
             line
@@ -169,56 +220,50 @@ impl SessionCommand {
         };
 
         loop {
-            let prompt = if no_context {
-                line.unwrap()
-            } else {
-                prompt.replace("${TRANSCRIPT}", &current_transcript)
+            let prompt = match (no_context, &prefix_ai) {
+                (true, None) => line.unwrap(),
+                (true, Some(prefix)) => format!("{}{}", line.unwrap(), prefix),
+                (false, None) => prompt.replace("${TRANSCRIPT}", &current_transcript),
+                (false, Some(prefix)) =>
+                    prompt.replace("${TRANSCRIPT}", &current_transcript) + &prefix
             };
 
-            let res = client.post("https://api.openai.com/v1/completions")
-                .json(&json!({
-                    "model": model.to_versioned(), 
-                    "prompt": &prompt,
-                    "max_tokens": 1000,
-                    "temperature": temperature,
-                    "n": self.response_count.unwrap_or(1)
-                }))
-                .send()
-                .await
-                .expect("Failed to send completion");
+            let result = match &command {
+                Ok(command) => command.run(client, config, &prompt).await?,
+                Err(command) => command.run(client, config, &prompt).await?,
+            };
 
-            let response: OpenAIResponse::<Response> = res.json()
-                .await
-                .expect("Unknown json response from OpenAI");
-
-            match response {
-                OpenAIResponse::Ok(r) => {
-                    let text = &r.choices.first().unwrap().text;
-
-                    if let Some(count) = self.response_count {
-                        if count > 1 {
-                            return Ok(r.choices.into_iter().map(|j| j.text).collect());
-                        }
-                    }
-
-                    write_next_line(text, &mut current_transcript, session_file.as_mut());
-                    if !self.quiet {
-                        println!("{}", text);
-                    }
-
-                    if self.append || self.append_string.is_some() {
-                        return Ok(vec![ text.to_owned() ]);
-                    }
-                },
-                OpenAIResponse::Err(err) => {
-                    eprintln!("Error: {:?}", err.error);
+            if let Some(count) = self.response_count {
+                if count > 1 {
+                    return Ok(result);
                 }
+            }
+
+            let text = result.first().unwrap().trim();
+            let written_response = match &prefix_ai {
+                Some(prefix) => format!("{}{}", prefix, text),
+                None => text.to_owned()
+            };
+            write_next_line(&written_response, &mut current_transcript, session_file.as_mut());
+
+            if !self.quiet {
+                println!("{}", text);
+            }
+
+            if self.append || self.append_string.is_some() {
+                return Ok(vec![ text.to_string() ]);
             }
 
             line = read_next_user_line();
             match line {
-                Some(ref line) => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
                 None => return Ok(vec![]),
+                Some(ref line) => match &prefix_user {
+                    None => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
+                    Some(prefix) => {
+                        let combined = format!("{}{}", prefix, line);
+                        write_next_line(&combined, &mut current_transcript, session_file.as_mut());
+                    }
+                }
             }
         }
     }
@@ -257,13 +302,9 @@ impl SessionCommand {
 
     pub fn parse_no_context(&self) -> bool {
         self.no_context.unwrap_or_else(|| {
-            match self.model {
-                Model::TextDavinci |
-                Model::TextCurie |
-                Model::TextBabbage |
-                Model::TextAda => false,
-                Model::CodeDavinci |
-                Model::CodeCushman => true
+            match self.model_focus {
+                ModelFocus::Text => false,
+                ModelFocus::Code => true,
             }
         })
     }
@@ -279,60 +320,51 @@ impl SessionCommand {
                     })
             })
             .unwrap_or_else(|| {
-                match self.model {
-                    Model::TextDavinci |
-                    Model::TextCurie |
-                    Model::TextBabbage |
-                    Model::TextAda => DEFAULT_CHAT_PROMPT_WRAPPER.to_owned(),
-                    Model::CodeDavinci |
-                    Model::CodeCushman => DEFAULT_CODE_PROMPT_WRAPPER.to_owned()
+                match self.model_focus {
+                    ModelFocus::Text => DEFAULT_CHAT_PROMPT_WRAPPER.to_owned(),
+                    ModelFocus::Code => DEFAULT_CODE_PROMPT_WRAPPER.to_owned(),
                 }
             })
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
-pub enum Model {
+#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+pub enum Provider {
+    /// Cohere
+    Cohere,
+
+    /// OpenAI
     #[default]
-    TextDavinci,
-    TextCurie,
-    TextBabbage,
-    TextAda,
-    CodeDavinci,
-    CodeCushman
+    OpenAI,
 }
 
-impl Model {
-    fn to_versioned(&self) -> &str {
-        match self {
-            Model::TextDavinci => "text-davinci-003",
-            Model::TextCurie => "text-curie-001",
-            Model::TextBabbage => "text-babbage-001",
-            Model::TextAda => "text-ada-001",
-            Model::CodeDavinci => "code-davinci-002",
-            Model::CodeCushman => "code-cushman-001",
-        }
-    }
+#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+pub enum Model {
+    /// In the range of 0 - 1 billion parameters. OpenAI's Ada, Cohere's "small" option.
+    Tiny,
+
+    /// In the range of 1 - 5 billion parameters. OpenAI's Babbage option.
+    Small,
+
+    /// In the range of 5 - 10 billion parameters. OpenAI's Curie, Cohere's "medium" option.
+    Medium,
+
+    /// In the range of 10 - 50 billion parameters. Cohere's large option.
+    Large,
+
+    /// In the range of 50 - 150 billion paramaters. Cohere's xlarge option.
+    XLarge,
+
+    /// Greater than 150 billion paramaters. OpenAI's davinci model.
+    #[default]
+    XXLarge
 }
 
-#[derive(Deserialize)]
-pub struct Response {
-    choices: Vec<ResponseChoice>,
-}
-
-#[derive(Deserialize)]
-pub struct ResponseChoice {
-    pub text: String,
-    pub index: u32,
-    pub logprobs: Option<u32>,
-    pub finish_reason: String
-}
-
-#[derive(Deserialize)]
-pub struct ResponseUsage {
-    pub prompt_tokens: u32,
-    pub completion_tokens: u32,
-    pub total_tokens: u32
+#[derive(Copy, Clone, Default, Debug, ValueEnum)]
+pub enum ModelFocus {
+    Code,
+    #[default]
+    Text
 }
 
 fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
@@ -350,19 +382,17 @@ fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
         match &args.prompt {
             Some(_) => {
                 println!(concat!(
-                    "\nHello, I'm ChatGPT using the model: {} with a temperature of {}. ",
+                    "\nHello, I'm an AI using a {} model. ",
                     "The prompt used is:\n\n"),
-                    args.model.to_possible_value().unwrap().get_name(),
-                    args.temperature
+                    args.model.to_possible_value().unwrap().get_name()
                 );
                 println!("\nWith prompt:\n {}", args.parse_prompt().replace("${TRANSCRIPT}", ""));
             },
             None => {
                 println!(concat!("\n",
-                    "Hello, I'm ChatGPT using the model: {} with a temperature of {}. ",
+                    "Hello, I'm an AI using a {} model. ",
                     "Ask me anything."),
-                    args.model.to_possible_value().unwrap().get_name(),
-                    args.temperature
+                    args.model.to_possible_value().unwrap().get_name()
                 );
             }
         }
@@ -384,8 +414,8 @@ fn print_default_prompts() {
 
 fn read_next_user_line() -> Option<String> {
     let mut rl = rustyline::Editor::<()>::new().expect("Failed to create rusty line editor");
-    match rl.readline("\n\t") {
-        Ok(line) => Some(String::from("\n\t") + line.trim_end()),
+    match rl.readline("") {
+        Ok(line) => Some(String::from("") + line.trim_end()),
         Err(_) => None
     }
 }
@@ -407,5 +437,4 @@ Transcript:
 
 ${TRANSCRIPT}
 
-Output the next thing the AI says:
 ";

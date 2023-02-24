@@ -3,17 +3,21 @@ extern crate derive_more;
 mod image;
 mod session;
 mod openai;
+mod cohere;
+mod config;
+
+pub use config::Config;
 
 use std::fs;
 use std::env;
 use std::concat;
 use clap::{Parser,Subcommand};
-use serde::Deserialize;
 use reqwest::ClientBuilder;
 use reqwest::header::{HeaderValue,HeaderMap};
 use dirs;
 use image::{ImageCommand,PictureFormat};
 use session::SessionCommand;
+use config::{JSONConfig,DEFAULT_CONFIG_FILE};
 
 #[tokio::main]
 async fn main() {
@@ -25,7 +29,6 @@ async fn main() {
             path
         })
         .expect("Configuration directory could not be found");
-
 
     let config_file = {
         let mut config_file = config_dir.clone();
@@ -41,21 +44,24 @@ async fn main() {
     let config_string = fs::read_to_string(&config_file)
         .unwrap_or_else(|_| DEFAULT_CONFIG_FILE.into());
 
-    let config: Config = serde_json::from_str(&config_string)
+    let config_json: JSONConfig = serde_json::from_str(&config_string)
         .expect("Config file could not be read");
 
-    let api_key = env::var("AI_API_KEY")
-        .unwrap_or_else(|_| config.api_key);
-
-    if api_key.len() == 0 {
-        panic!(concat!(
-            "An API key needs to be passed as either the AI_API_KEY environment varaible or ",
-            "specified as the api_key in the config file found at: {}"), &config_file.display());
-    }
+    let config = Config {
+        api_key: config_json.api_key,
+        api_key_cohere: config_json.api_key_cohere,
+        api_key_openai: config_json.api_key_openai,
+        dir: config_dir
+    };
 
     let mut headers = HeaderMap::new();
+    headers.insert("Accept", HeaderValue::from_static("application/json"));
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-    headers.insert("Authorization", HeaderValue::from_str(&("Bearer ".to_owned() + &api_key)).unwrap());
+
+    if let Some(key) = env::var("AI_API_KEY").ok().or_else(|| config.api_key.clone()) {
+        let bearer = "Bearer ".to_owned() + &key;
+        headers.insert("Authorization", HeaderValue::from_str(&bearer).unwrap());
+    }
 
     let client = ClientBuilder::new()
         .default_headers(headers)
@@ -64,7 +70,7 @@ async fn main() {
 
     match cli.command {
         Commands::Session(session) => {
-            let result = session.run(&client, config_dir).await;
+            let result = session.run(&client, &config).await;
             if let Err(e) = result {
                 eprintln!("{:?}", e);
             }
@@ -105,11 +111,3 @@ enum Commands {
     Image(ImageCommand)
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct Config {
-    api_key: String
-}
-
-const DEFAULT_CONFIG_FILE: &str = r#"{
-    "api_key": ""
-}"#;
