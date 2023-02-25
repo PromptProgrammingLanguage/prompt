@@ -69,7 +69,7 @@ async fn main() {
         .expect("Failed to construct http client");
 
     match cli.command {
-        Commands::Session(session) => {
+        Commands::Session(mut session) => {
             let result = session.run(&client, &config).await;
             if let Err(e) = result {
                 eprintln!("{:?}", e);

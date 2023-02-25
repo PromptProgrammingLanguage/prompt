@@ -10,7 +10,7 @@ use crate::openai::response::OpenAIError;
 use crate::cohere::session::{CohereSessionCommand,CohereError};
 use crate::Config;
 
-#[derive(Args, Clone, Debug)]
+#[derive(Args, Clone, Debug, Serialize, Deserialize)]
 pub struct SessionCommand {
     /// Allow the AI to generate a response to the prompt before user input
     #[arg(long)]
@@ -46,6 +46,10 @@ pub struct SessionCommand {
     /// Overwrite the existing session if it already exists
     #[arg(long)]
     pub overwrite: bool,
+
+    /// Override the existing session configuration
+    #[arg(long)]
+    pub override_session_configuration: bool,
 
     /// Running conversation prompt to assist the AI in responding. The current conversation can be
     /// inserted into the prompt using the ${TRANSCRIPT} variable. Run ai with the
@@ -103,6 +107,7 @@ impl Default for SessionCommand {
             temperature: 0.8,
             name: None,
             overwrite: false,
+            override_session_configuration: false,
             prompt: None,
             prompt_path: None,
             no_context: None,
@@ -111,7 +116,7 @@ impl Default for SessionCommand {
             quiet: false,
             provider: Provider::default(),
             prefix_ai: None,
-            prefix_user: None
+            prefix_user: None,
         }
     }
 }
@@ -134,18 +139,19 @@ pub enum SessionError {
 }
 
 impl SessionCommand {
-    pub async fn run(&self, client: &Client, config: &Config) -> SessionResult {
+    pub async fn run(&mut self, client: &Client, config: &Config) -> SessionResult {
         let SessionCommand { ref name, .. } = self;
 
         self.validate()?;
 
-        let no_context = self.parse_no_context();
-        let prompt = self.parse_prompt();
-        let prefix_user = self.prefix_user.clone().or_else(|| match &*prompt {
+        self.no_context = Some(self.parse_no_context());
+        self.prompt = Some(self.parse_prompt());
+        let prompt = self.prompt.clone().unwrap();
+        self.prefix_user = self.prefix_user.clone().or_else(|| match &*prompt {
             DEFAULT_CHAT_PROMPT_WRAPPER => Some(String::from("HUMAN: ")),
             _ => None
         });
-        let prefix_ai = self.prefix_ai.clone().or_else(|| match &*prompt {
+        self.prefix_ai = self.prefix_ai.clone().or_else(|| match &*prompt {
             DEFAULT_CHAT_PROMPT_WRAPPER => Some(String::from("AI: ")),
             _ => None
         });
@@ -177,14 +183,50 @@ impl SessionCommand {
                 path.push(name);
                 path
             };
-            current_transcript = fs::read_to_string(&path).unwrap_or_default().trim_end().to_owned();
 
-            Some(OpenOptions::new()
-                .append(true)
-                .create(true)
-                .open(path)
-                .expect("Unable to open session file path")
-            )
+            match fs::read_to_string(&path) {
+                Ok(mut session_config) if !self.override_session_configuration => {
+                    let divider_index = session_config.find("<->")
+                        .expect("Valid session files have a <-> divider");
+
+                    current_transcript = session_config
+                        .split_off(divider_index + 4)
+                        .trim()
+                        .to_string();
+                    session_config.split_off(divider_index);
+
+                    let config: SessionCommand = serde_yaml::from_str(&session_config)
+                        .expect("Serializing self to yaml config should work 100% of the time");
+
+                    self.override_config_with_saved_session(config);
+
+                    Some(OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open(path)
+                        .expect("Unable to open session file")
+                    )
+                },
+                Ok(mut session_config) => {
+                    todo!();
+                },
+                Err(_) => {
+                    let config = serde_yaml::to_string(self)
+                        .expect("Serializing self to yaml config should work 100% of the time");
+
+                    let mut file = OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open(path)
+                        .expect("Unable to open session file");
+
+                    if let Err(e) = writeln!(file, "{}<->", &config) {
+                        eprintln!("Couldn't write new configuration to file: {}", e);
+                    }
+
+                    Some(file)
+                }
+            }
         } else {
             None
         };
@@ -197,16 +239,18 @@ impl SessionCommand {
         // The commands need to be instantiated before printing the opening prompt because they can
         // print warnings about mismatched options without failing.
         let command = match self.provider {
-            Provider::OpenAI => Ok(OpenAISessionCommand::try_from(self)?),
-            Provider::Cohere => Err(CohereSessionCommand::try_from(self)?),
+            Provider::OpenAI => Ok(OpenAISessionCommand::try_from(&*self)?),
+            Provider::Cohere => Err(CohereSessionCommand::try_from(&*self)?),
         };
 
         print_opening_prompt(&self, &current_transcript);
 
         let mut line = if !self.ai_responds_first {
-            let line = self.append_string.clone().or_else(|| read_next_user_line());
+            let line = self.append_string.clone()
+                .or_else(|| read_next_user_line(self.prefix_user.as_ref()));
+
             match line {
-                Some(ref line) => match &prefix_user {
+                Some(ref line) => match &self.prefix_user {
                     None => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
                     Some(prefix) => {
                         let combined = format!("{}{}", prefix, line);
@@ -221,7 +265,7 @@ impl SessionCommand {
         };
 
         loop {
-            let prompt = match (no_context, &prefix_ai) {
+            let prompt = match (self.no_context.unwrap(), &self.prefix_ai) {
                 (true, None) => line.unwrap(),
                 (true, Some(prefix)) => format!("{}{}", line.unwrap(), prefix),
                 (false, None) => prompt.replace("${TRANSCRIPT}", &current_transcript),
@@ -241,24 +285,24 @@ impl SessionCommand {
             }
 
             let text = result.first().unwrap().trim();
-            let written_response = match &prefix_ai {
+            let written_response = match &self.prefix_ai {
                 Some(prefix) => format!("{}{}", prefix, text),
                 None => text.to_owned()
             };
             write_next_line(&written_response, &mut current_transcript, session_file.as_mut());
 
             if !self.quiet {
-                println!("{}", text);
+                println!("{}", written_response);
             }
 
             if self.append || self.append_string.is_some() {
                 return Ok(vec![ text.to_string() ]);
             }
 
-            line = read_next_user_line();
+            line = read_next_user_line(self.prefix_user.as_ref());
             match line {
                 None => return Ok(vec![]),
-                Some(ref line) => match &prefix_user {
+                Some(ref line) => match &self.prefix_user {
                     None => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
                     Some(prefix) => {
                         let combined = format!("{}{}", prefix, line);
@@ -267,6 +311,23 @@ impl SessionCommand {
                 }
             }
         }
+    }
+
+    fn override_config_with_saved_session(&mut self, saved: SessionCommand) {
+        self.ai_responds_first = saved.ai_responds_first;
+        self.append = saved.append;
+        self.append_string = saved.append_string;
+        self.model = saved.model;
+        self.model_focus = saved.model_focus;
+        self.temperature = saved.temperature;
+        self.name = saved.name;
+        self.overwrite = saved.overwrite;
+        self.prompt = saved.prompt;
+        self.prompt_path = saved.prompt_path;
+        self.no_context = saved.no_context;
+        self.quiet = saved.quiet;
+        self.prefix_user = saved.prefix_user;
+        self.prefix_ai = saved.prefix_ai;
     }
 
     fn validate(&self) -> Result<(), SessionError> {
@@ -329,7 +390,7 @@ impl SessionCommand {
     }
 }
 
-#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+#[derive(Copy, Clone, Debug, Default, ValueEnum, Serialize, Deserialize)]
 pub enum Provider {
     /// Cohere
     Cohere,
@@ -339,7 +400,7 @@ pub enum Provider {
     OpenAI,
 }
 
-#[derive(Copy, Clone, Debug, Default, ValueEnum)]
+#[derive(Copy, Clone, Debug, Default, ValueEnum, Serialize, Deserialize)]
 pub enum Model {
     /// In the range of 0 - 1 billion parameters. OpenAI's Ada, Cohere's "small" option.
     Tiny,
@@ -361,7 +422,7 @@ pub enum Model {
     XXLarge
 }
 
-#[derive(Copy, Clone, Default, Debug, ValueEnum)]
+#[derive(Copy, Clone, Default, Debug, ValueEnum, Serialize, Deserialize)]
 pub enum ModelFocus {
     Code,
     #[default]
@@ -379,6 +440,16 @@ fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
 
     if session_file.len() > 0 {
         println!("{}", session_file);
+        /*
+        println!("{}", session_file.split("\n")
+            .map(|line| line
+                .replace(&args.prefix_user.clone().unwrap(), "")
+                .replace(&args.prefix_ai.clone().unwrap(), "")
+            )
+            .collect::<Vec<String>>()
+            .join("\n")
+        );
+        */
     } else {
         match &args.prompt {
             Some(_) => {
@@ -413,9 +484,12 @@ fn print_default_prompts() {
         DEFAULT_CHAT_PROMPT_WRAPPER, DEFAULT_CODE_PROMPT_WRAPPER);
 }
 
-fn read_next_user_line() -> Option<String> {
+fn read_next_user_line(prefix_user: Option<&String>) -> Option<String> {
     let mut rl = rustyline::Editor::<()>::new().expect("Failed to create rusty line editor");
-    match rl.readline("") {
+    let default = String::new();
+    let prefix = prefix_user.unwrap_or(&default);
+
+    match rl.readline(prefix) {
         Ok(line) => Some(String::from("") + line.trim_end()),
         Err(_) => None
     }
