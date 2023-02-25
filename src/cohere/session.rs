@@ -40,6 +40,7 @@ impl CohereSessionCommand {
         if let Some(key) = &config.api_key_cohere {
             post = post.bearer_auth(key);
         }
+
         let request = post
             .header("Cohere-Version", HeaderValue::from_static("2022-12-06"))
             .json(&json!({
@@ -49,7 +50,7 @@ impl CohereSessionCommand {
                 "return_likelihoods": "NONE",
                 "truncate": "NONE",
                 "num_generations": self.command.response_count.unwrap_or(1),
-                "temperature": 5,
+                "temperature": self.temperature.0,
                 "stop_sequences": [ "HUMAN:", "AI:" ]
             }))
             .send()

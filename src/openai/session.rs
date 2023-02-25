@@ -73,7 +73,7 @@ impl TryFrom<f32> for OpenAITemperature {
 
     fn try_from(n: f32) -> Result<Self, SessionError> {
         match n.floor() as u32 {
-            0..=1 => Ok(OpenAITemperature(n)),
+            0..=2 => Ok(OpenAITemperature(n)),
             _ => Err(SessionError::TemperatureOutOfValidRange)
         }
     }

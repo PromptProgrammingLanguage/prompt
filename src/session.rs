@@ -440,16 +440,6 @@ fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
 
     if session_file.len() > 0 {
         println!("{}", session_file);
-        /*
-        println!("{}", session_file.split("\n")
-            .map(|line| line
-                .replace(&args.prefix_user.clone().unwrap(), "")
-                .replace(&args.prefix_ai.clone().unwrap(), "")
-            )
-            .collect::<Vec<String>>()
-            .join("\n")
-        );
-        */
     } else {
         match &args.prompt {
             Some(_) => {
