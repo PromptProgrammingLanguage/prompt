@@ -1,6 +1,5 @@
 use serde_json::json;
 use serde::Deserialize;
-use super::response::OpenAIResponse;
 use crate::session::{SessionResult,SessionError,ModelFocus,Model};
 use crate::{Config,SessionCommand};
 use reqwest::Client;
@@ -48,20 +47,11 @@ impl OpenAISessionCommand {
             .await
             .expect("Failed to send completion");
 
-        let response: OpenAIResponse::<OpenAISessionResponse> = request.json()
-            .await
-            .expect("Unknown json response from OpenAI");
-
-        match response {
-            OpenAIResponse::Ok(r) => {
-                Ok(r.choices.into_iter().map(|j| j.text).collect())
-            },
-
-            OpenAIResponse::Err(err) => {
-                eprintln!("Error: {:?}", err.error);
-                Ok(vec![])
-            }
+        if !request.status().is_success() {
+            return Err(SessionError::OpenAIError(request.json().await?));
         }
+
+        Ok(request.json().await?)
     }
 }
 
@@ -82,6 +72,18 @@ impl TryFrom<f32> for OpenAITemperature {
 #[derive(Deserialize)]
 pub struct OpenAISessionResponse {
     pub choices: Vec<OpenAIChoice>,
+    pub created: usize,
+    pub model: String,
+    pub object: String,
+    pub id: String,
+    pub usage: OpenAIUsage
+}
+
+#[derive(Deserialize)]
+pub struct OpenAIUsage {
+    pub prompt_tokens: usize,
+    pub completion_tokens: usize,
+    pub total_tokens: usize
 }
 
 #[derive(Deserialize)]
@@ -89,7 +91,7 @@ pub struct OpenAIChoice {
     pub text: String,
     pub index: u32,
     pub logprobs: Option<u32>,
-    pub finish_reason: String
+    pub finish_reason: Option<String>
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]

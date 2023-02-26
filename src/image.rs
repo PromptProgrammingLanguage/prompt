@@ -6,7 +6,7 @@ use serde::{Deserialize,Serialize};
 use serde_json::json;
 use rustc_serialize::base64::FromBase64;
 use derive_more::{From,TryInto};
-use crate::openai::response::{OpenAIResponse,OpenAIError};
+use crate::openai::OpenAIError;
 
 #[derive(Clone, Debug, Args)]
 pub struct ImageCommand {
@@ -45,15 +45,15 @@ impl Default for ImageCommand {
 
 pub type ImageResult = Result<Vec<ImageData>, ImageError>;
 
-#[derive(Clone, Debug, From, Serialize, Deserialize)]
+#[derive(Debug, From)]
 pub enum ImageError {
     OpenAIError(OpenAIError),
-    Hum
+    DeserializeError(reqwest::Error)
 }
 
 impl ImageCommand {
     pub async fn run(&self, client: &Client) -> ImageResult {
-        let res = client.post("https://api.openai.com/v1/images/generations")
+        let request = client.post("https://api.openai.com/v1/images/generations")
             .json(&json!({
                 "prompt": &self.prompt,
                 "n": self.count,
@@ -74,18 +74,17 @@ impl ImageCommand {
             .await
             .expect("Failed to send completion");
 
-        let response: OpenAIResponse::<OpenAIImageResponse> = res.json()
-            .await
-            .expect("Unknown json response from OpenAI");
-
-        match (&self.out, response) {
-            (Some(out), OpenAIResponse::Ok(response)) => {
-                write_data_to_directory(out, &response);
-                Ok(response.data)
-            },
-            (None, OpenAIResponse::Ok(response)) => Ok(response.data),
-            (_, OpenAIResponse::Err(e)) => Err(e.error.into())
+        if !request.status().is_success() {
+            return Err(ImageError::OpenAIError(request.json().await?));
         }
+
+        let response: OpenAIImageResponse = request.json().await?;
+
+        if let Some(out) = &self.out {
+            write_data_to_directory(out, &response);
+        }
+
+        Ok(response.data)
     }
 }
 

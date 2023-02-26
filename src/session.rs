@@ -4,9 +4,9 @@ use std::fs::{File,OpenOptions};
 use std::io::Write;
 use clap::{Args,ValueEnum};
 use reqwest::Client;
+use derive_more::From;
 use serde::{Serialize,Deserialize};
-use crate::openai::session::{OpenAISessionCommand};
-use crate::openai::response::OpenAIError;
+use crate::openai::{OpenAISessionCommand,OpenAIError};
 use crate::cohere::session::{CohereSessionCommand,CohereError};
 use crate::Config;
 
@@ -124,7 +124,7 @@ impl Default for SessionCommand {
 
 pub type SessionResult = Result<Vec<String>, SessionError>;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(From, Debug)]
 pub enum SessionError {
     AppendRequiresSession,
     AppendsClash,
@@ -135,7 +135,8 @@ pub enum SessionError {
     TemperatureOutOfValidRange,
     ZeroResponseCountIsNonsensical,
     CohereError(CohereError),
-    OpenAIError(OpenAIError)
+    OpenAIError(OpenAIError),
+    DeserializeError(reqwest::Error)
 }
 
 impl SessionCommand {
