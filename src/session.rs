@@ -132,6 +132,7 @@ pub enum SessionError {
     QuietRequiresSession,
     NoMatchingModel,
     OverwriteRequiresSession,
+    PromptCantainsNoTranscript,
     TemperatureOutOfValidRange,
     ZeroResponseCountIsNonsensical,
     CohereError(CohereError),
@@ -148,6 +149,10 @@ impl SessionCommand {
         self.no_context = Some(self.parse_no_context());
         self.prompt = Some(self.parse_prompt());
         let prompt = self.prompt.clone().unwrap();
+        if !prompt.contains("${TRANSCRIPT}") {
+            return Err(SessionError::PromptCantainsNoTranscript);
+        }
+
         self.prefix_user = self.prefix_user.clone().or_else(|| match &*prompt {
             DEFAULT_CHAT_PROMPT_WRAPPER => Some(String::from("HUMAN: ")),
             _ => None
