@@ -2,6 +2,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::fs::{File,OpenOptions};
 use std::io::Write;
+use async_recursion::async_recursion;
 use clap::{Args,ValueEnum};
 use reqwest::Client;
 use derive_more::From;
@@ -94,6 +95,11 @@ pub struct SessionCommand {
     /// Number of responses to generate
     #[arg(skip)]
     pub response_count: Option<usize>,
+
+    /// Sequences are a collection of sessions that let you process input sequentially. So you may
+    /// have a session that just filters for profanity, and then...
+    #[arg(long)]
+    pub sequence: Option<Vec<String>>,
 }
 
 impl Default for SessionCommand {
@@ -117,12 +123,22 @@ impl Default for SessionCommand {
             provider: Provider::default(),
             prefix_ai: None,
             prefix_user: None,
+            sequence: None
         }
     }
 }
 
 
 pub type SessionResult = Result<Vec<String>, SessionError>;
+pub trait SessionResultExt {
+    fn single_result(&self) -> Option<&str>;
+}
+
+impl SessionResultExt for SessionResult {
+    fn single_result(&self) -> Option<&str> {
+        self.as_ref().ok().and_then(|r| r.first()).map(|x| &**x)
+    }
+}
 
 #[derive(From, Debug)]
 pub enum SessionError {
@@ -137,110 +153,50 @@ pub enum SessionError {
     ZeroResponseCountIsNonsensical,
     CohereError(CohereError),
     OpenAIError(OpenAIError),
-    DeserializeError(reqwest::Error)
+    DeserializeError(reqwest::Error),
 }
 
 impl SessionCommand {
-    pub async fn run(&mut self, client: &Client, config: &Config) -> SessionResult {
-        let SessionCommand { ref name, .. } = self;
+    pub fn new_from_name(name: &str, config: &Config) -> Self {
+        SessionCommand {
+            name: name.clone().to_owned().into(),
+            ..SessionCommand::default()
+        }
+    }
 
+    #[async_recursion]
+    pub async fn run(&mut self, client: &Client, config: &Config) -> SessionResult {
         self.validate()?;
+
+        let mut sequences = match &self.sequence {
+            None => vec![],
+            Some(sequences) => sequences.first().unwrap().split(",")
+                .map(|name| SessionCommand::new_from_name(name.trim(), config))
+                .collect::<Vec<SessionCommand>>(),
+        };
 
         self.no_context = Some(self.parse_no_context());
         self.prompt = Some(self.parse_prompt());
-        let prompt = self.prompt.clone().unwrap();
-        if !prompt.contains("${TRANSCRIPT}") {
+
+        if !self.prompt.as_ref().unwrap().contains("${TRANSCRIPT}") {
             return Err(SessionError::PromptCantainsNoTranscript);
         }
 
-        self.prefix_user = self.prefix_user.clone().or_else(|| match &*prompt {
-            DEFAULT_CHAT_PROMPT_WRAPPER => Some(String::from("HUMAN: ")),
-            _ => None
-        });
-        self.prefix_ai = self.prefix_ai.clone().or_else(|| match &*prompt {
-            DEFAULT_CHAT_PROMPT_WRAPPER => Some(String::from("AI: ")),
-            _ => None
-        });
-
-        let session_dir = {
-            let mut dir = config.dir.clone();
-            dir.push("sessions");
-            dir
-        };
-        fs::create_dir_all(&session_dir).expect("Config directory could not be created");
-
-        if self.overwrite {
-            let path = {
-                let mut path = session_dir.clone();
-                path.push(name.as_ref().unwrap());
-                path
-            };
-            let file = OpenOptions::new().write(true).truncate(true).open(path);
-            if let Ok(mut session_file) = file {
-                session_file.write_all(b"").expect("Unable to write to session file");
-                session_file.flush().expect("Unable to write to session file");
-            }
-        }
-
-        let mut current_transcript = String::new();
-        let mut session_file: Option<File> = if let Some(name) = name {
-            let path = {
-                let mut path = session_dir.clone();
-                path.push(name);
-                path
-            };
-
-            match fs::read_to_string(&path) {
-                Ok(mut session_config) if !self.override_session_configuration => {
-                    let divider_index = session_config.find("<->")
-                        .expect("Valid session files have a <-> divider");
-
-                    current_transcript = session_config
-                        .split_off(divider_index + 4)
-                        .trim()
-                        .to_string();
-                    session_config.split_off(divider_index);
-
-                    let config: SessionCommand = serde_yaml::from_str(&session_config)
-                        .expect("Serializing self to yaml config should work 100% of the time");
-
-                    self.override_config_with_saved_session(config);
-
-                    Some(OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open(path)
-                        .expect("Unable to open session file")
-                    )
-                },
-                Ok(mut session_config) => {
-                    todo!();
-                },
-                Err(_) => {
-                    let config = serde_yaml::to_string(self)
-                        .expect("Serializing self to yaml config should work 100% of the time");
-
-                    let mut file = OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open(path)
-                        .expect("Unable to open session file");
-
-                    if let Err(e) = writeln!(file, "{}<->", &config) {
-                        eprintln!("Couldn't write new configuration to file: {}", e);
-                    }
-
-                    Some(file)
-                }
-            }
-        } else {
-            None
-        };
 
         if self.print_default_prompts {
             print_default_prompts();
             return Ok(vec![]);
         }
+        let (mut current_transcript, mut session_file) = self.load_session_file(config);
+
+        self.prefix_user = self.prefix_user.clone().or_else(|| match self.prompt.as_deref() {
+            Some(DEFAULT_CHAT_PROMPT_WRAPPER) => Some(String::from("HUMAN: ")),
+            _ => None
+        });
+        self.prefix_ai = self.prefix_ai.clone().or_else(|| match self.prompt.as_deref() {
+            Some(DEFAULT_CHAT_PROMPT_WRAPPER) => Some(String::from("AI: ")),
+            _ => None
+        });
 
         // The commands need to be instantiated before printing the opening prompt because they can
         // print warnings about mismatched options without failing.
@@ -249,7 +205,7 @@ impl SessionCommand {
             Provider::Cohere => Err(CohereSessionCommand::try_from(&*self)?),
         };
 
-        print_opening_prompt(&self, &current_transcript);
+        //print_opening_prompt(&self, &current_transcript);
 
         let mut line = if !self.ai_responds_first {
             let line = self.append_string.clone()
@@ -271,9 +227,18 @@ impl SessionCommand {
         };
 
         loop {
+            for mut sequence in sequences.iter_mut() {
+                sequence.append_string = Some(current_transcript.clone());
+                sequence.quiet = true;
+                sequence.prefix_user = None;
+                sequence.prefix_ai = None;
+
+                current_transcript = sequence.run(client, config).await?.first().cloned().unwrap();
+            }
+            let prompt = self.prompt.as_ref().unwrap();
             let prompt = match (self.no_context.unwrap(), &self.prefix_ai) {
-                (true, None) => line.unwrap(),
-                (true, Some(prefix)) => format!("{}{}", line.unwrap(), prefix),
+                (true, None) => prompt.replace("${TRANSCRIPT}", &line.unwrap()),
+                (true, Some(prefix)) => prompt.replace("${TRANSCRIPT}", &line.unwrap()) + &prefix,
                 (false, None) => prompt.replace("${TRANSCRIPT}", &current_transcript),
                 (false, Some(prefix)) =>
                     prompt.replace("${TRANSCRIPT}", &current_transcript) + &prefix
@@ -319,7 +284,90 @@ impl SessionCommand {
         }
     }
 
+    fn load_session_file(&mut self, config: &Config) -> (String, Option<File>) {
+        let session_dir = {
+            let mut dir = config.dir.clone();
+            dir.push("sessions");
+            dir
+        };
+        fs::create_dir_all(&session_dir).expect("Config directory could not be created");
+
+        if self.overwrite {
+            let path = {
+                let mut path = session_dir.clone();
+                path.push(self.name.as_ref().unwrap());
+                path
+            };
+            let file = OpenOptions::new().write(true).truncate(true).open(path);
+            if let Ok(mut session_file) = file {
+                session_file.write_all(b"").expect("Unable to write to session file");
+                session_file.flush().expect("Unable to write to session file");
+            }
+        }
+
+        let mut current_transcript = String::new();
+        let session_file: Option<File> = if let Some(name) = self.name.clone() {
+            let path = {
+                let mut path = session_dir.clone();
+                path.push(name);
+                path
+            };
+
+            match fs::read_to_string(&path) {
+                Ok(mut session_config) => {
+                    let divider_index = session_config.find("<->")
+                        .expect("Valid session files have a <-> divider");
+
+                    current_transcript = session_config
+                        .split_off(divider_index + 4)
+                        .trim()
+                        .to_string();
+                    session_config.split_off(divider_index);
+
+                    let config: SessionCommand = serde_yaml::from_str(&session_config)
+                        .expect("Serializing self to yaml config should work 100% of the time");
+
+                    self.override_config_with_saved_session(config);
+
+                    Some(OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open(path)
+                        .expect("Unable to open session file")
+                    )
+                },
+                Err(_) => {
+                    let config = serde_yaml::to_string(self)
+                        .expect("Serializing self to yaml config should work 100% of the time");
+
+                    let mut file = OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open(path)
+                        .expect("Unable to open session file");
+
+                    if let Err(e) = writeln!(file, "{}<->", &config) {
+                        eprintln!("Couldn't write new configuration to file: {}", e);
+                    }
+
+                    Some(file)
+                }
+            }
+        } else {
+            None
+        };
+
+        return (current_transcript, session_file)
+    }
+
     fn override_config_with_saved_session(&mut self, saved: SessionCommand) {
+        if saved.prompt.is_some() {
+            self.prompt = saved.prompt;
+        }
+        if saved.no_context.unwrap_or(false) {
+            self.no_context = Some(true);
+        }
+        /*
         self.ai_responds_first = saved.ai_responds_first;
         self.append = saved.append;
         self.append_string = saved.append_string;
@@ -334,6 +382,7 @@ impl SessionCommand {
         self.quiet = saved.quiet;
         self.prefix_user = saved.prefix_user;
         self.prefix_ai = saved.prefix_ai;
+        */
     }
 
     fn validate(&self) -> Result<(), SessionError> {
@@ -344,10 +393,6 @@ impl SessionCommand {
 
             if self.overwrite {
                 return Err(SessionError::OverwriteRequiresSession);
-            }
-
-            if self.quiet {
-                return Err(SessionError::QuietRequiresSession);
             }
         }
 

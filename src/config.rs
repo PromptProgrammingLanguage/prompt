@@ -8,7 +8,7 @@ pub struct JSONConfig {
     pub api_key_openai: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Config {
     pub api_key: Option<String>,
     pub api_key_cohere: Option<String>,

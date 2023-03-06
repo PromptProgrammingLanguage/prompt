@@ -4,7 +4,7 @@ use crate::session::{SessionResult,SessionError,ModelFocus,Model};
 use crate::{Config,SessionCommand};
 use reqwest::Client;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct OpenAISessionCommand {
     pub command: SessionCommand,
     pub temperature: OpenAITemperature,
@@ -51,11 +51,12 @@ impl OpenAISessionCommand {
             return Err(SessionError::OpenAIError(request.json().await?));
         }
 
-        Ok(request.json().await?)
+        let session_response: OpenAISessionResponse = request.json().await?;
+        Ok(session_response.choices.into_iter().map(|r| r.text).collect())
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct OpenAITemperature(pub f32);
 
 impl TryFrom<f32> for OpenAITemperature {

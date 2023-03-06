@@ -6,7 +6,7 @@ use reqwest::Client;
 use reqwest::header::HeaderValue;
 use uuid::Uuid;
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct CohereSessionCommand {
     pub command: SessionCommand,
     pub model: CohereModel,
@@ -73,7 +73,7 @@ impl CohereSessionCommand {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub enum CohereModel {
     Small,
     Medium,
@@ -136,7 +136,7 @@ pub struct CohereError {
     pub message: String
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct CohereTemperature(pub f32);
 
 impl TryFrom<f32> for CohereTemperature {
