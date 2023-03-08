@@ -128,7 +128,6 @@ impl Default for SessionCommand {
     }
 }
 
-
 pub type SessionResult = Result<Vec<String>, SessionError>;
 pub trait SessionResultExt {
     fn single_result(&self) -> Option<&str>;

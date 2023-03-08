@@ -1,10 +1,12 @@
 extern crate derive_more;
 
+mod completion;
 mod image;
 mod session;
 mod openai;
 mod cohere;
 mod config;
+mod chat;
 
 pub use config::Config;
 
@@ -17,6 +19,7 @@ use reqwest::header::{HeaderValue,HeaderMap};
 use dirs;
 use image::{ImageCommand,PictureFormat};
 use session::SessionCommand;
+use chat::ChatCommand;
 use config::{JSONConfig,DEFAULT_CONFIG_FILE};
 
 #[tokio::main]
@@ -69,10 +72,16 @@ async fn main() {
         .expect("Failed to construct http client");
 
     match cli.command {
+        Commands::Chat(chat) => {
+            let result = chat.run(&client, &config).await;
+            if let Err(e) = result {
+                eprintln!("{:#?}", e);
+            }
+        },
         Commands::Session(mut session) => {
             let result = session.run(&client, &config).await;
             if let Err(e) = result {
-                eprintln!("{:?}", e);
+                eprintln!("{:#?}", e);
             }
         },
         Commands::Image(image) => {
@@ -86,7 +95,7 @@ async fn main() {
                             "API change?")));
                 },
                 (Err(e), _, _) => {
-                    eprintln!("{:?}", e);
+                    eprintln!("{:#?}", e);
                 },
                 _ => {}
             }
@@ -104,10 +113,13 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Starts a chat session
+    /// Starts (or resumes) a chat session
+    Chat(ChatCommand),
+
+    /// Starts a prompt based session
     Session(SessionCommand),
 
     /// Generates an image
-    Image(ImageCommand)
+    Image(ImageCommand),
 }
 

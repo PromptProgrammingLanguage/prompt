@@ -3,6 +3,7 @@ use serde::Deserialize;
 use crate::session::{SessionResult,SessionError,ModelFocus,Model};
 use crate::{Config,SessionCommand};
 use reqwest::Client;
+use super::response::OpenAICompletionResponse;
 
 #[derive(Debug, Default)]
 pub struct OpenAISessionCommand {
@@ -51,7 +52,7 @@ impl OpenAISessionCommand {
             return Err(SessionError::OpenAIError(request.json().await?));
         }
 
-        let session_response: OpenAISessionResponse = request.json().await?;
+        let session_response: OpenAICompletionResponse<OpenAISessionChoice> = request.json().await?;
         Ok(session_response.choices.into_iter().map(|r| r.text).collect())
     }
 }
@@ -68,31 +69,6 @@ impl TryFrom<f32> for OpenAITemperature {
             _ => Err(SessionError::TemperatureOutOfValidRange)
         }
     }
-}
-
-#[derive(Deserialize)]
-pub struct OpenAISessionResponse {
-    pub choices: Vec<OpenAIChoice>,
-    pub created: usize,
-    pub model: String,
-    pub object: String,
-    pub id: String,
-    pub usage: OpenAIUsage
-}
-
-#[derive(Deserialize)]
-pub struct OpenAIUsage {
-    pub prompt_tokens: usize,
-    pub completion_tokens: usize,
-    pub total_tokens: usize
-}
-
-#[derive(Deserialize)]
-pub struct OpenAIChoice {
-    pub text: String,
-    pub index: u32,
-    pub logprobs: Option<u32>,
-    pub finish_reason: Option<String>
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
@@ -162,4 +138,12 @@ impl TryFrom<(ModelFocus, Model)> for OpenAIModel {
             (ModelFocus::Text, Model::XXLarge) => OpenAIModel::TextDavinci,
         })
     }
+}
+
+#[derive(Deserialize)]
+pub struct OpenAISessionChoice {
+    pub text: String,
+    pub index: u32,
+    pub logprobs: Option<u32>,
+    pub finish_reason: Option<String>
 }

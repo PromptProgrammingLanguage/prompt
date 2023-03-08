@@ -1,14 +1,14 @@
 use serde::Deserialize;
 
-#[derive(Deserialize)]
-pub struct OpenAIErrorResponse {
-    pub error: OpenAIError
+#[derive(Deserialize, Debug, Clone)]
+pub struct OpenAIError {
+    pub error: OpenAIErrorInner
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct OpenAIError {
+pub struct OpenAIErrorInner {
     pub message: String,
     pub r#type: String,
     pub param: Option<String>,
-    pub code: Option<u32>
+    pub code: Option<String>
 }
