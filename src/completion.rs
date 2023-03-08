@@ -41,6 +41,10 @@ pub struct CompletionOptions {
     /// conversational style. Defaults to "USER:"
     #[arg(long)]
     pub prefix_user: Option<String>,
+
+    /// Stream the output to the terminal
+    #[arg(long)]
+    pub stream: Option<bool>,
 }
 
 impl CompletionOptions {
@@ -57,6 +61,7 @@ impl CompletionOptions {
             quiet: original.quiet.or(merged.quiet),
             prefix_ai: original.prefix_ai.or(merged.prefix_ai),
             prefix_user: original.prefix_user.or(merged.prefix_user),
+            stream: original.stream.or(merged.stream),
         }
     }
 
@@ -149,13 +154,31 @@ pub struct CompletionFile<T: Clone + Default + DeserializeOwned + Serialize = Co
 }
 
 impl CompletionFile {
+    pub fn write_words(&mut self, words: String) -> io::Result<String> {
+        match &mut self.file {
+            Some(file) => match write!(file, "{}", words) {
+                Ok(()) => { self.transcript += &words; Ok(words) },
+                Err(e) => Err(e)
+            },
+            None => { self.transcript += &words; Ok(words) }
+        }
+    }
+
     pub fn write(&mut self, line: String) -> io::Result<String> {
         match &mut self.file {
             Some(file) => match writeln!(file, "{}", line) {
-                Ok(()) => { self.transcript += &line; Ok(line) },
+                Ok(()) => {
+                    self.transcript += &line;
+                    self.transcript += "\n";
+                    Ok(line)
+                },
                 Err(e) => Err(e)
             },
-            None => { self.transcript += &line; Ok(line) }
+            None => {
+                self.transcript += &line;
+                self.transcript += "\n";
+                Ok(line)
+            }
         }
     }
 
