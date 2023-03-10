@@ -77,7 +77,7 @@ impl CompletionOptions {
         }
     }
 
-    pub fn load_session_file<T>(&self, config: &Config) -> CompletionFile<T>
+    pub fn load_session_file<T>(&self, config: &Config, mut overrides: T) -> CompletionFile<T>
     where
         T: Clone + Default + DeserializeOwned + Serialize
     {
@@ -109,7 +109,6 @@ impl CompletionOptions {
             };
 
             let mut transcript = String::new();
-            let mut overrides = T::default();
             let file = match fs::read_to_string(&path) {
                 Ok(mut session_config) => {
                     let divider_index = session_config.find("<->")
@@ -130,7 +129,7 @@ impl CompletionOptions {
                         .expect("Unable to open session file")
                 },
                 Err(_) => {
-                    let config = serde_yaml::to_string(self)
+                    let config = serde_yaml::to_string(&overrides)
                         .expect("Serializing self to yaml config should work 100% of the time");
 
                     let mut file = OpenOptions::new()
@@ -159,13 +158,16 @@ impl CompletionOptions {
 }
 
 #[derive(Default)]
-pub struct CompletionFile<T: Clone + Default + DeserializeOwned + Serialize = CompletionOptions> {
+pub struct CompletionFile<T: Clone + Default + DeserializeOwned + Serialize> {
     pub file: Option<File>,
     pub overrides: T,
     pub transcript: String
 }
 
-impl CompletionFile {
+impl<T> CompletionFile<T>
+where
+    T: Clone + Default + DeserializeOwned + Serialize
+{
     pub fn write_words(&mut self, words: String) -> io::Result<String> {
         match &mut self.file {
             Some(file) => match write!(file, "{}", words) {

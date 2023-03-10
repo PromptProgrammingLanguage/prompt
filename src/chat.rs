@@ -16,9 +16,10 @@ use tiktoken_rs::p50k_base;
 
 const CHAT_TOKENS_MAX: usize = 4096;
 
-#[derive(Args, Clone, Debug, Serialize, Deserialize)]
+#[derive(Args, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatCommand {
     #[command(flatten)]
+    #[serde(flatten)]
     pub completion: CompletionOptions,
 
     #[arg(long, short)]
@@ -165,7 +166,7 @@ struct ChatOptions {
     ai_responds_first: bool,
     completion: CompletionOptions,
     system: String,
-    file: CompletionFile,
+    file: CompletionFile<ChatCommand>,
     prefix_ai: String,
     prefix_user: String,
     stream: bool,
@@ -178,12 +179,13 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
     type Error = ChatError;
 
     fn try_from((command, config): (&ChatCommand, &Config)) -> Result<Self, Self::Error> {
-        let file = command.completion.load_session_file::<CompletionOptions>(config);
+        let file = command.completion.load_session_file::<ChatCommand>(config, command.clone());
         let completion = if file.file.is_some() {
-            command.completion.merge(&file.overrides)
+            command.completion.merge(&file.overrides.completion)
         } else {
             command.completion.clone()
         };
+
         let stream = match (completion.quiet, completion.stream) {
             (Some(true), Some(true)) => return Err(ChatError::ClashingArguments {
                 error: "Having both quiet and stream enabled doesn't make sense.".into()
@@ -198,14 +200,18 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
             (None, None) => true
         };
 
+        let system = command.system
+            .clone()
+            .or_else(|| file.overrides.system.clone())
+            .clone()
+            .unwrap_or_else(|| String::from("A friendly and helpful AI assistant."));
+
         Ok(ChatOptions {
             ai_responds_first: completion.ai_responds_first.unwrap_or(false),
             temperature: completion.temperature.unwrap_or(0.8),
             prefix_ai: completion.prefix_ai.clone().unwrap_or_else(|| String::from("AI")),
             prefix_user: completion.prefix_user.clone().unwrap_or_else(|| String::from("USER")),
-            system: command.system
-                .clone()
-                .unwrap_or_else(|| String::from("A friendly and helpful AI assistant.")),
+            system,
             tokens_balance: completion.tokens_balance.unwrap_or(0.5),
             tokens_max: CHAT_TOKENS_MAX,
             completion,
@@ -273,7 +279,7 @@ pub struct ChatMessage {
 impl ChatMessage {
     pub fn new(role: ChatRole, content: impl AsRef<str>) -> Self {
         let tokens = p50k_base().unwrap()
-            .encode_with_special_tokens(&format!("{}: {}", role, content.as_ref()))
+            .encode_with_special_tokens(&format!("{}{}", role, content.as_ref()))
             .len();
 
         ChatMessage {
@@ -397,9 +403,9 @@ pub enum ChatRole {
 impl std::fmt::Display for ChatRole {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         write!(f, "{}", match self {
-            Self::Ai => "AI",
-            Self::User => "USER",
-            Self::System => "SYSTEM"
+            Self::Ai => "AI: ",
+            Self::User => "USER: ",
+            Self::System => "SYSTEM: "
         })
     }
 }
@@ -429,7 +435,7 @@ mod tests {
         let system = String::from("You're a duck. Say quack.");
         let file = CompletionFile {
             file: None,
-            overrides: CompletionOptions::default(),
+            overrides: ChatCommand::default(),
             transcript: concat!(
                 "USER: hey\n",
                 concat!(
@@ -460,7 +466,7 @@ mod tests {
         let system = String::from("You're a duck. Say quack.");
         let file = CompletionFile {
             file: None,
-            overrides: CompletionOptions::default(),
+            overrides: ChatCommand::default(),
             transcript: concat!(
                 "USER: hey\n",
                 concat!(
@@ -491,7 +497,7 @@ mod tests {
         let system = String::from("You're a duck. Say quack.");
         let file = CompletionFile {
             file: None,
-            overrides: CompletionOptions::default(),
+            overrides: ChatCommand::default(),
             transcript: concat!(
                 "USER: hey. This is a really long message to ensure that it gets labotomized.\n",
                 "AI: hey"
