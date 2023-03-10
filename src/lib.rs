@@ -1,3 +1,5 @@
+mod completion;
+mod chat;
 mod session;
 mod image;
 mod openai;
@@ -15,4 +17,10 @@ pub use image::{
     ImageBinary,
     PictureSize,
     PictureFormat
+};
+pub use chat::{
+    ChatCommand,
+    ChatResult,
+    ChatResultExt,
+    ChatError,
 };

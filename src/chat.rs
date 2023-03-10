@@ -244,7 +244,7 @@ pub enum ChatError {
 }
 
 #[derive(Debug)]
-pub struct ChatTranscriptionError(String);
+pub struct ChatTranscriptionError(pub String);
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct OpenAIChatChoice {
@@ -297,11 +297,11 @@ pub struct ChatMessageDelta {
 }
 
 pub type ChatMessages = Vec<ChatMessage>;
-pub trait ChatMessagesExt {
+trait ChatMessagesInternalExt {
     fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> where Self: Sized;
 }
 
-impl ChatMessagesExt for ChatMessages {
+impl ChatMessagesInternalExt for ChatMessages {
     fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> {
         let tokens_max = options.tokens_max;
         let tokens_balance = options.tokens_balance;
