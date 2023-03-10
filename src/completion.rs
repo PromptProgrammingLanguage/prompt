@@ -157,7 +157,7 @@ impl CompletionOptions {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct CompletionFile<T: Clone + Default + DeserializeOwned + Serialize> {
     pub file: Option<File>,
     pub overrides: T,
