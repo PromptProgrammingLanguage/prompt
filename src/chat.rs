@@ -339,36 +339,40 @@ impl TryFrom<&ChatOptions> for ChatMessages {
         let ChatOptions { file, system, .. } = options;
 
         let mut messages = vec![];
-        let mut message = None;
+        let mut message: Option<ChatMessage> = None;
 
         messages.push(ChatMessage::new(ChatRole::System, system));
 
+        let handle_continuing_line = |line, message: &mut Option<ChatMessage>| match message {
+            Some(m) => {
+                *message = Some(ChatMessage::new(m.role, {
+                    let mut content = m.content.clone();
+                    content += "\n";
+                    content += line;
+                    content
+                }));
+                Ok(())
+            },
+            None => {
+                return Err(ChatError::ChatTranscriptionError(ChatTranscriptionError(
+                    "Missing opening chat role".into()
+                )));
+            }
+        };
+
         for line in file.transcript.lines() {
             match line.split_once(':') {
-                Some((role, line)) => {
-                    if let Some(message) = message {
-                        messages.push(message);
-                    }
+                Some((role, dialog)) => match ChatRole::try_from(role) {
+                    Ok(role) => {
+                        if let Some(message) = message {
+                            messages.push(message);
+                        }
 
-                    message = Some(ChatMessage::new(
-                        ChatRole::try_from(role)?,
-                        line.trim_start()));
-                },
-                None => match message {
-                    Some(m) => {
-                        message = Some(ChatMessage::new(m.role, {
-                            let mut content = m.content.clone();
-                            content += "\n";
-                            content += line;
-                            content
-                        }));
+                        message = Some(ChatMessage::new(role, dialog.trim_start()));
                     },
-                    None => {
-                        return Err(ChatError::ChatTranscriptionError(ChatTranscriptionError(
-                            "Missing opening chat role".into()
-                        )));
-                    }
-                }
+                    Err(_) => handle_continuing_line(line, &mut message)?
+                },
+                None => handle_continuing_line(line, &mut message)?
             }
         }
 
@@ -447,6 +451,37 @@ mod tests {
             ChatMessage::new(ChatRole::Ai, concat!(
                 "I'm a multimodel super AI hell bent on destroying the world.\n",
                 "How can I help you today?"
+            )),
+        ]);
+    }
+
+    #[test]
+    fn transcript_handles_labels_correctly() {
+        let system = String::from("You're a duck. Say quack.");
+        let file = CompletionFile {
+            file: None,
+            overrides: CompletionOptions::default(),
+            transcript: concat!(
+                "USER: hey\n",
+                concat!(
+                    "AI: I'm a multimodel super AI hell bent on destroying the world.\n",
+                    "For example: This might have screwed up before"
+                )
+            ).to_string()
+        };
+        let options = ChatOptions {
+            tokens_max: 4000,
+            tokens_balance: 0.5,
+            system: system.clone(),
+            file,
+            ..ChatOptions::default()
+        };
+        assert_eq!(ChatMessages::try_from(&options).unwrap(), vec![
+            ChatMessage::new(ChatRole::System, system),
+            ChatMessage::new(ChatRole::User, "hey"),
+            ChatMessage::new(ChatRole::Ai, concat!(
+                "I'm a multimodel super AI hell bent on destroying the world.\n",
+                "For example: This might have screwed up before"
             )),
         ]);
     }
