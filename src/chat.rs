@@ -12,6 +12,10 @@ use crate::openai::OpenAIError;
 use crate::completion::{CompletionOptions,CompletionFile};
 use crate::Config;
 
+use tiktoken_rs::p50k_base;
+
+const CHAT_TOKENS_MAX: usize = 4096;
+
 #[derive(Args, Clone, Debug, Serialize, Deserialize)]
 pub struct ChatCommand {
     #[command(flatten)]
@@ -61,12 +65,13 @@ impl ChatCommand {
 
 async fn handle_sync(client: &Client, options: &mut ChatOptions, print_output: bool) -> ChatResult {
     let post = client.post("https://api.openai.com/v1/chat/completions");
-    let messages = transcript_to_chat_messages(&options.file, &options.system)?;
+
+    let messages = ChatMessages::try_from(&*options)?;
     let request = post
         .json(&json!({
             "model": "gpt-3.5-turbo",
             "temperature": options.temperature,
-            "messages": messages
+            "messages": messages,
         }))
         .send()
         .await
@@ -110,7 +115,7 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions) -> ChatResult
             "model": "gpt-3.5-turbo",
             "temperature": options.temperature,
             "stream": true,
-            "messages": transcript_to_chat_messages(&options.file, &options.system)?
+            "messages": ChatMessages::try_from(&*options)?
         }));
 
     let mut stream = EventSource::new(post).unwrap();
@@ -128,11 +133,7 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions) -> ChatResult
 
                 let delta = &chat_response.choices.first().unwrap().delta;
                 if let Some(ref role) = delta.role {
-                    let role = options.file.write_words(match role {
-                        ChatRole::Ai => "AI: ".into(),
-                        ChatRole::System => "SYSTEM: ".into(),
-                        ChatRole::User => "USER: ".into(),
-                    })?;
+                    let role = options.file.write_words(format!("{}", role))?;
                     print!("{}", role);
                     has_written = true;
                 }
@@ -159,6 +160,7 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions) -> ChatResult
     Ok(vec![])
 }
 
+#[derive(Default)]
 struct ChatOptions {
     ai_responds_first: bool,
     completion: CompletionOptions,
@@ -168,6 +170,8 @@ struct ChatOptions {
     prefix_user: String,
     stream: bool,
     temperature: f32,
+    tokens_max: usize,
+    tokens_balance: f32
 }
 
 impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
@@ -202,6 +206,8 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
             system: command.system
                 .clone()
                 .unwrap_or_else(|| String::from("A friendly and helpful AI assistant.")),
+            tokens_balance: completion.tokens_balance.unwrap_or(0.5),
+            tokens_max: CHAT_TOKENS_MAX,
             completion,
             stream,
             file,
@@ -238,7 +244,15 @@ pub struct ChatTranscriptionError(String);
 pub struct OpenAIChatChoice {
     index: Option<usize>,
     message: Option<ChatMessage>,
-    finish_reason: Option<String>
+    finish_reason: Option<OpenAIFinishReason>
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAIFinishReason {
+    Stop,
+    Length,
+    ContentFilter
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -252,6 +266,22 @@ pub struct OpenAIChatDelta {
 pub struct ChatMessage {
     pub role: ChatRole,
     pub content: String,
+    #[serde(skip)]
+    pub tokens: usize
+}
+
+impl ChatMessage {
+    pub fn new(role: ChatRole, content: impl AsRef<str>) -> Self {
+        let tokens = p50k_base().unwrap()
+            .encode_with_special_tokens(&format!("{}: {}", role, content.as_ref()))
+            .len();
+
+        ChatMessage {
+            role,
+            content: content.as_ref().to_string(),
+            tokens
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -260,12 +290,93 @@ pub struct ChatMessageDelta {
     pub content: Option<String>,
 }
 
-impl ChatMessage {
-    pub fn new(role: ChatRole, content: impl AsRef<str>) -> Self {
-        ChatMessage {
-            role,
-            content: content.as_ref().to_string()
+pub type ChatMessages = Vec<ChatMessage>;
+pub trait ChatMessagesExt {
+    fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> where Self: Sized;
+}
+
+impl ChatMessagesExt for ChatMessages {
+    fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> {
+        let tokens_max = options.tokens_max;
+        let tokens_balance = options.tokens_balance;
+        let upper_bound = (tokens_max as f32 * tokens_balance).floor() as usize;
+        let current_token_length: usize = self.iter().map(|m| m.tokens).sum();
+
+        if current_token_length > upper_bound {
+            let system = ChatMessage::new(ChatRole::System, options.system.clone());
+            let mut remaining = match upper_bound.checked_sub(system.tokens) {
+                Some(r) => r,
+                None => return Err(ChatTranscriptionError(concat!(
+                    "Cannot fit your system message into the chat messages list. This means ",
+                    "that your tokens_max value is either too small or your system message is ",
+                    "way too long"
+                ).into()).into()),
+            };
+            let mut messages = vec![];
+
+            for message in self.iter().skip(1).rev() {
+                match remaining.checked_sub(message.tokens) {
+                    Some(subtracted) => {
+                        remaining = subtracted;
+                        messages.push(message);
+                    },
+                    None => break,
+                }
+            }
+
+            messages.push(&system);
+            Ok(messages.iter().rev().map(|i| i.clone()).cloned().collect())
+        } else {
+            Ok(self.clone())
         }
+    }
+}
+
+impl TryFrom<&ChatOptions> for ChatMessages {
+    type Error = ChatError;
+
+    fn try_from(options: &ChatOptions) -> Result<Self, Self::Error> {
+        let ChatOptions { file, system, .. } = options;
+
+        let mut messages = vec![];
+        let mut message = None;
+
+        messages.push(ChatMessage::new(ChatRole::System, system));
+
+        for line in file.transcript.lines() {
+            match line.split_once(':') {
+                Some((role, line)) => {
+                    if let Some(message) = message {
+                        messages.push(message);
+                    }
+
+                    message = Some(ChatMessage::new(
+                        ChatRole::try_from(role)?,
+                        line.trim_start()));
+                },
+                None => match message {
+                    Some(m) => {
+                        message = Some(ChatMessage::new(m.role, {
+                            let mut content = m.content.clone();
+                            content += "\n";
+                            content += line;
+                            content
+                        }));
+                    },
+                    None => {
+                        return Err(ChatError::ChatTranscriptionError(ChatTranscriptionError(
+                            "Missing opening chat role".into()
+                        )));
+                    }
+                }
+            }
+        }
+
+        if let Some(message) = message {
+            messages.push(message);
+        }
+
+        return Ok(messages.labotomize(&options)?);
     }
 }
 
@@ -277,6 +388,16 @@ pub enum ChatRole {
     User,
     #[serde(rename = "system")]
     System
+}
+
+impl std::fmt::Display for ChatRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", match self {
+            Self::Ai => "AI",
+            Self::User => "USER",
+            Self::System => "SYSTEM"
+        })
+    }
 }
 
 impl TryFrom<&str> for ChatRole {
@@ -295,55 +416,13 @@ impl TryFrom<&str> for ChatRole {
     }
 }
 
-fn transcript_to_chat_messages(
-    file: &CompletionFile,
-    system: &str) -> Result<Vec<ChatMessage>, ChatError>
-{
-    let mut messages = vec![];
-    let mut message = None;
-
-    messages.push(ChatMessage::new(ChatRole::System, system));
-
-    for line in file.transcript.lines() {
-        match line.split_once(':') {
-            Some((role, line)) => {
-                if let Some(message) = message {
-                    messages.push(message);
-                }
-
-                message = Some(ChatMessage {
-                    role: ChatRole::try_from(role)?,
-                    content: line.trim_start().to_string()
-                });
-            },
-            None => match message {
-                Some(ref mut message) => {
-                    message.content += "\n";
-                    message.content += line;
-                },
-                None => {
-                    return Err(ChatError::ChatTranscriptionError(ChatTranscriptionError(
-                        "Missing opening chat role".into()
-                    )));
-                }
-            }
-        }
-    }
-
-    if let Some(message) = message {
-        messages.push(message);
-    }
-
-    return Ok(messages);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn transcript_with_multiple_lines() {
-        let system = "You're a duck. Say quack.";
+        let system = String::from("You're a duck. Say quack.");
         let file = CompletionFile {
             file: None,
             overrides: CompletionOptions::default(),
@@ -355,16 +434,44 @@ mod tests {
                 )
             ).to_string()
         };
-        assert_eq!(transcript_to_chat_messages(&file, system).unwrap(), vec![
-            ChatMessage { role: ChatRole::System, content: system.into() },
-            ChatMessage { role: ChatRole::User, content: "hey".into() },
-            ChatMessage {
-                role: ChatRole::Ai,
-                content: concat!(
-                    "I'm a multimodel super AI hell bent on destroying the world.\n",
-                    "How can I help you today?"
-                ).into()
-            },
+        let options = ChatOptions {
+            system: system.clone(),
+            file,
+            tokens_max: 4096,
+            tokens_balance: 0.5,
+            ..ChatOptions::default()
+        };
+        assert_eq!(ChatMessages::try_from(&options).unwrap(), vec![
+            ChatMessage::new(ChatRole::System, system),
+            ChatMessage::new(ChatRole::User, "hey"),
+            ChatMessage::new(ChatRole::Ai, concat!(
+                "I'm a multimodel super AI hell bent on destroying the world.\n",
+                "How can I help you today?"
+            )),
+        ]);
+    }
+
+    #[test]
+    fn transcript_labotomizes_itself() {
+        let system = String::from("You're a duck. Say quack.");
+        let file = CompletionFile {
+            file: None,
+            overrides: CompletionOptions::default(),
+            transcript: concat!(
+                "USER: hey. This is a really long message to ensure that it gets labotomized.\n",
+                "AI: hey"
+            ).to_string()
+        };
+        let options = ChatOptions {
+            tokens_max: 40,
+            tokens_balance: 0.5,
+            system: system.clone(),
+            file,
+            ..ChatOptions::default()
+        };
+        assert_eq!(ChatMessages::try_from(&options).unwrap(), vec![
+            ChatMessage::new(ChatRole::System, system),
+            ChatMessage::new(ChatRole::Ai, "hey"),
         ]);
     }
 }

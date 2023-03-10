@@ -1,4 +1,4 @@
-use clap::Args;
+use clap::{Args,ValueEnum};
 use serde::{Serialize,Deserialize};
 use serde::de::DeserializeOwned;
 use std::fs::{self,File,OpenOptions};
@@ -45,6 +45,16 @@ pub struct CompletionOptions {
     /// Stream the output to the terminal
     #[arg(long)]
     pub stream: Option<bool>,
+
+    /// The number of maximum total tokens to allow. The maximum upper value of this is dependant on
+    /// the model you're currently using, but often it's 4096.
+    #[arg(long)]
+    pub tokens_max: Option<usize>,
+
+    /// A percentage given from 0 to 0.9 to indicate what percentage of the current conversation
+    /// context to keep. Defaults to 0.5
+    #[arg(long)]
+    pub tokens_balance: Option<f32>,
 }
 
 impl CompletionOptions {
@@ -62,6 +72,8 @@ impl CompletionOptions {
             prefix_ai: original.prefix_ai.or(merged.prefix_ai),
             prefix_user: original.prefix_user.or(merged.prefix_user),
             stream: original.stream.or(merged.stream),
+            tokens_max: original.tokens_max.or(merged.tokens_max),
+            tokens_balance: original.tokens_balance.or(merged.tokens_balance),
         }
     }
 
