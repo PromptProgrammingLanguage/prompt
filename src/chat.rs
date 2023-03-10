@@ -310,15 +310,13 @@ impl ChatMessagesInternalExt for ChatMessages {
 
         if current_token_length > upper_bound {
             let system = ChatMessage::new(ChatRole::System, options.system.clone());
-            let mut remaining = match upper_bound.checked_sub(system.tokens) {
-                Some(r) => r,
-                None => return Err(ChatTranscriptionError(concat!(
-                    "Cannot fit your system message into the chat messages list. This means ",
-                    "that your tokens_max value is either too small or your system message is ",
-                    "way too long"
-                ).into()).into()),
-            };
             let mut messages = vec![];
+            let mut remaining = upper_bound.checked_sub(system.tokens)
+                .ok_or_else(|| ChatTranscriptionError(format!(
+                    "Cannot fit your system message into the chat messages list. This means \
+                    that your tokens_max value is either too small or your system message is \
+                    too long. You're upper bound on transcript tokens is {upper_bound} and \
+                    your system message has {} tokens", system.tokens)))?;
 
             for message in self.iter().skip(1).rev() {
                 match remaining.checked_sub(message.tokens) {
