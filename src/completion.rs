@@ -24,6 +24,11 @@ pub struct CompletionOptions {
     #[arg(short, long)]
     pub name: Option<String>,
 
+    /// Disables the context of the conversation, every message sent to the AI is standalone. If you
+    /// use a coding model this defaults to true unless prompt is specified.
+    //#[arg(long)]
+    //pub no_context: Option<bool>,
+
     /// Overwrite the existing session if it already exists
     #[arg(long)]
     pub overwrite: Option<bool>,
@@ -41,6 +46,10 @@ pub struct CompletionOptions {
     /// conversational style. Defaults to "USER:"
     #[arg(long)]
     pub prefix_user: Option<String>,
+
+    /// Number of responses to generate
+    //#[arg(skip)]
+    //pub response_count: Option<usize>,
 
     /// Stream the output to the terminal
     #[arg(long)]
