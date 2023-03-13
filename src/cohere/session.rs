@@ -1,31 +1,31 @@
 use serde_json::json;
 use serde::{Deserialize,Serialize};
-use crate::session::{SessionResult,SessionError,Model,ModelFocus};
-use crate::{Config,SessionCommand};
+use crate::session::{SessionResult,SessionOptions,SessionError,Model,ModelFocus};
+use crate::{Config};
 use reqwest::Client;
 use reqwest::header::HeaderValue;
 use uuid::Uuid;
 
 #[derive(Debug, Default)]
 pub struct CohereSessionCommand {
-    pub command: SessionCommand,
-    pub model: CohereModel,
-    pub temperature: CohereTemperature,
+    model: CohereModel,
+    temperature: CohereTemperature,
+    response_count: usize
 }
 
-impl TryFrom<&SessionCommand> for CohereSessionCommand {
+impl TryFrom<&SessionOptions> for CohereSessionCommand {
     type Error = SessionError;
 
-    fn try_from(command: &SessionCommand) -> Result<Self, SessionError> {
-        match command.model_focus {
+    fn try_from(options: &SessionOptions) -> Result<Self, SessionError> {
+        match options.model_focus {
             ModelFocus::Code => { return Err(SessionError::NoMatchingModel); },
             _ => {}
         }
 
         Ok(Self {
-            command: command.clone(),
-            temperature: CohereTemperature::try_from(command.temperature)?,
-            model: CohereModel::try_from(command.model)?
+            temperature: CohereTemperature::try_from(options.completion.temperature.unwrap_or(0.8))?,
+            model: CohereModel::try_from(options.model)?,
+            response_count: options.completion.response_count.unwrap_or(1)
         })
     }
 }
@@ -49,7 +49,7 @@ impl CohereSessionCommand {
                 "max_tokens": 100,
                 "return_likelihoods": "NONE",
                 "truncate": "NONE",
-                "num_generations": self.command.response_count.unwrap_or(1),
+                "num_generations": self.response_count,
                 "temperature": self.temperature.0,
                 "stop_sequences": [ "HUMAN:", "AI:" ]
             }))

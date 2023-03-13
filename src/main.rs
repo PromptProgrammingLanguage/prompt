@@ -78,7 +78,7 @@ async fn main() {
                 eprintln!("{:#?}", e);
             }
         },
-        Commands::Session(mut session) => {
+        Commands::Session(session) => {
             let result = session.run(&client, &config).await;
             if let Err(e) = result {
                 eprintln!("{:#?}", e);

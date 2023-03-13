@@ -4,6 +4,7 @@ use serde::de::DeserializeOwned;
 use std::fs::{self,File,OpenOptions};
 use std::io::{self,Write};
 use crate::Config;
+use derive_more::Constructor;
 
 #[derive(Args, Clone, Default, Debug, Serialize, Deserialize)]
 pub struct CompletionOptions {
@@ -26,8 +27,8 @@ pub struct CompletionOptions {
 
     /// Disables the context of the conversation, every message sent to the AI is standalone. If you
     /// use a coding model this defaults to true unless prompt is specified.
-    //#[arg(long)]
-    //pub no_context: Option<bool>,
+    #[arg(long)]
+    pub no_context: Option<bool>,
 
     /// Overwrite the existing session if it already exists
     #[arg(long)]
@@ -48,8 +49,8 @@ pub struct CompletionOptions {
     pub prefix_user: Option<String>,
 
     /// Number of responses to generate
-    //#[arg(skip)]
-    //pub response_count: Option<usize>,
+    #[arg(skip)]
+    pub response_count: Option<usize>,
 
     /// Stream the output to the terminal
     #[arg(long)]
@@ -83,6 +84,8 @@ impl CompletionOptions {
             stream: original.stream.or(merged.stream),
             tokens_max: original.tokens_max.or(merged.tokens_max),
             tokens_balance: original.tokens_balance.or(merged.tokens_balance),
+            no_context: original.no_context.or(merged.no_context),
+            response_count: original.response_count.or(merged.response_count),
         }
     }
 
@@ -164,6 +167,54 @@ impl CompletionOptions {
 
         file.unwrap_or_default()
     }
+
+    pub fn parse_stream_option(&self) -> Result<bool, ClashingArgumentsError> {
+        match (self.quiet, self.stream) {
+            (Some(true), Some(true)) => return Err(ClashingArgumentsError::new(
+                "Having both quiet and stream enabled doesn't make sense.".into()
+            )),
+            (Some(true), None) |
+            (Some(true), Some(false)) |
+            (None, Some(false)) |
+            (Some(false), Some(false)) => Ok(false),
+            (Some(false), None) |
+            (Some(false), Some(true)) |
+            (None, Some(true)) |
+            (None, None) => Ok(true)
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ClashingArgumentsError> {
+        if self.name.is_none() {
+            if self.append.is_some() {
+                return Err(ClashingArgumentsError::new(
+                    "The append option also requires a session name"));
+            }
+
+            if self.overwrite.unwrap_or(false) {
+                return Err(ClashingArgumentsError::new(
+                    "The overwrite options also requires a session name"));
+            }
+        }
+
+        if self.ai_responds_first.unwrap_or(false) && self.append.is_some() {
+            return Err(ClashingArgumentsError::new(
+                "Specifying that the ai responds first with the append option is nonsensical"));
+        }
+
+        if let Some(count) = self.response_count {
+            if count == 0 {
+                return Err(ClashingArgumentsError::new("The response count should be more than 0"));
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Constructor, Debug)]
+pub struct ClashingArgumentsError {
+    pub error: &'static str
 }
 
 #[derive(Debug, Default)]

@@ -5,7 +5,7 @@ use reqwest::Client;
 use derive_more::From;
 use crate::openai::chat::OpenAIChatCommand;
 use crate::openai::OpenAIError;
-use crate::completion::{CompletionOptions,CompletionFile};
+use crate::completion::{CompletionOptions,CompletionFile,ClashingArgumentsError};
 use crate::Config;
 
 const CHAT_TOKENS_MAX: usize = 4096;
@@ -68,20 +68,7 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
             command.completion.clone()
         };
 
-        let stream = match (completion.quiet, completion.stream) {
-            (Some(true), Some(true)) => return Err(ChatError::ClashingArguments {
-                error: "Having both quiet and stream enabled doesn't make sense.".into()
-            }),
-            (Some(true), None) |
-            (Some(true), Some(false)) |
-            (None, Some(false)) |
-            (Some(false), Some(false)) => false,
-            (Some(false), None) |
-            (Some(false), Some(true)) |
-            (None, Some(true)) |
-            (None, None) => true
-        };
-
+        let stream = completion.parse_stream_option()?;
         let system = command.system
             .clone()
             .or_else(|| file.overrides.system.clone())
@@ -116,7 +103,7 @@ impl ChatResultExt for ChatResult {
 
 #[derive(Debug, From)]
 pub enum ChatError {
-    ClashingArguments { error: String },
+    ClashingArguments(ClashingArgumentsError),
     ChatTranscriptionError(ChatTranscriptionError),
     TranscriptDeserializationError(serde_json::Error),
     OpenAIError(OpenAIError),

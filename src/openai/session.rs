@@ -1,25 +1,26 @@
 use serde_json::json;
 use serde::Deserialize;
-use crate::session::{SessionResult,SessionError,ModelFocus,Model};
-use crate::{Config,SessionCommand};
+use crate::session::{SessionResult,SessionOptions,SessionError,ModelFocus,Model};
+use crate::{Config};
 use reqwest::Client;
 use super::response::OpenAICompletionResponse;
 
 #[derive(Debug, Default)]
 pub struct OpenAISessionCommand {
-    pub command: SessionCommand,
-    pub temperature: OpenAITemperature,
-    pub model: OpenAIModel
+    temperature: OpenAITemperature,
+    model: OpenAIModel,
+    response_count: usize
 }
 
-impl TryFrom<&SessionCommand> for OpenAISessionCommand {
+impl TryFrom<&SessionOptions> for OpenAISessionCommand {
     type Error = SessionError;
 
-    fn try_from(command: &SessionCommand) -> Result<Self, SessionError> {
+    fn try_from(options: &SessionOptions) -> Result<Self, SessionError> {
         Ok(Self {
-            command: command.clone(),
-            temperature: OpenAITemperature::try_from(command.temperature)?,
-            model: OpenAIModel::try_from((command.model_focus, command.model))?
+            model: OpenAIModel::try_from((options.model_focus, options.model))?,
+            temperature:
+                OpenAITemperature::try_from(options.completion.temperature.unwrap_or(0.8))?,
+            response_count: options.completion.response_count.unwrap_or(1),
         })
     }
 }
@@ -42,7 +43,7 @@ impl OpenAISessionCommand {
                 "prompt": &prompt,
                 "max_tokens": 1000,
                 "temperature": self.temperature.0,
-                "n": self.command.response_count.unwrap_or(1)
+                "n": self.response_count
             }))
             .send()
             .await

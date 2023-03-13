@@ -1,7 +1,3 @@
-use std::fs;
-use std::path::PathBuf;
-use std::fs::{File,OpenOptions};
-use std::io::Write;
 use async_recursion::async_recursion;
 use clap::{Args,ValueEnum};
 use reqwest::Client;
@@ -9,122 +5,73 @@ use derive_more::From;
 use serde::{Serialize,Deserialize};
 use crate::openai::{OpenAISessionCommand,OpenAIError};
 use crate::cohere::session::{CohereSessionCommand,CohereError};
+use crate::completion::{CompletionFile,CompletionOptions,ClashingArgumentsError};
 use crate::Config;
 
-#[derive(Args, Clone, Debug, Serialize, Deserialize)]
+#[derive(Args, Clone, Default, Debug, Serialize, Deserialize)]
 pub struct SessionCommand {
-    /// Allow the AI to generate a response to the prompt before user input
-    #[arg(long)]
-    pub ai_responds_first: bool,
-
-    /// Append a new input to an existing session and get only the latest response. If
-    /// ai-responds-first is set to true then only the ai response is included.
-    #[arg(long)]
-    pub append: bool,
-
-    /// Append a string to an existing session and get only the latest response. This is the same as
-    /// the "append" cli argument but it takes a string directly instead of blocking to wait for
-    /// user input.
-    #[arg(long)]
-    pub append_string: Option<String>,
+    #[command(flatten)]
+    #[serde(flatten)]
+    pub completion: CompletionOptions,
 
     /// Model size
-    #[arg(value_enum, long, short, default_value_t = SessionCommand::default().model)]
-    pub model: Model,
+    #[arg(value_enum, long, short)]
+    pub model: Option<Model>,
 
     /// Model focus
-    #[arg(value_enum, long, default_value_t = SessionCommand::default().model_focus)]
-    pub model_focus: ModelFocus,
+    #[arg(value_enum, long)]
+    pub model_focus: Option<ModelFocus>,
 
-    /// Temperature of the model on a scale from 0 to 1. 0 is most accurate while 1 is most creative
-    #[arg(long, short, default_value_t = SessionCommand::default().temperature)]
-    pub temperature: f32,
-
-    /// Saves your conversation context using the session name
+    /// Prompt
     #[arg(short, long)]
-    pub name: Option<String>,
-
-    /// Overwrite the existing session if it already exists
-    #[arg(long)]
-    pub overwrite: bool,
-
-    /// Override the existing session configuration
-    #[arg(long)]
-    pub override_session_configuration: bool,
-
-    /// Running conversation prompt to assist the AI in responding. The current conversation can be
-    /// inserted into the prompt using the ${TRANSCRIPT} variable. Run ai with the
-    /// --print-default-prompts flag to see examples of what's used for the text and code models.
-    #[arg(long)]
     pub prompt: Option<String>,
 
-    /// Path to a prompt file to load. See prompt option for details.
+    /// Prompt path
     #[arg(long)]
-    pub prompt_path: Option<PathBuf>,
+    pub prompt_path: Option<String>,
 
-    /// Disables the context of the conversation, every message sent to the AI is standalone. If you
-    /// use a coding model this defaults to true unless prompt is specified.
+    /// Provider
     #[arg(long)]
-    pub no_context: Option<bool>,
-    
-    /// Lists the default prompts for chat models. Useful if you want to start with a template when
-    /// writing your own prompt.
-    #[arg(long)]
-    pub print_default_prompts: bool,
-
-    /// Only write output the session file
-    #[arg(long)]
-    pub quiet: bool,
-
-    /// Provider for the session service
-    #[arg(value_enum, long, default_value_t = SessionCommand::default().provider)]
-    pub provider: Provider,
-
-    /// Prefix input with the supplied string. This can be used for labels if your prompt has a
-    /// conversational style. If you're using the default chat prompt then this defaults to
-    /// "HUMAN: ", otherwise it's an empty string.
-    #[arg(long)]
-    pub prefix_user: Option<String>,
-
-    /// Prefix ai responses with the supplied string. This can be used for labels if your prompt has
-    /// a conversational style. If you're using the default chat prompt then this defaults to
-    /// "AI: ", otherwise it's an empty string.
-    #[arg(long)]
-    pub prefix_ai: Option<String>,
-
-    /// Number of responses to generate
-    #[arg(skip)]
-    pub response_count: Option<usize>,
-
-    /// Sequences are a collection of sessions that let you process input sequentially. So you may
-    /// have a session that just filters for profanity, and then...
-    #[arg(long)]
-    pub sequence: Option<Vec<String>>,
+    pub provider: Option<Provider>,
 }
 
-impl Default for SessionCommand {
-    fn default() -> Self {
-        SessionCommand {
-            ai_responds_first: false,
-            append: false,
-            append_string: None,
-            model: Model::default(),
-            model_focus: ModelFocus::default(),
-            temperature: 0.8,
-            name: None,
-            overwrite: false,
-            override_session_configuration: false,
-            prompt: None,
-            prompt_path: None,
-            no_context: None,
-            print_default_prompts: false,
-            response_count: None,
-            quiet: false,
-            provider: Provider::default(),
-            prefix_ai: None,
-            prefix_user: None,
-            sequence: None
-        }
+#[derive(Debug, Default)]
+pub(crate) struct SessionOptions {
+    pub ai_responds_first: bool,
+    pub completion: CompletionOptions,
+    pub file: CompletionFile<SessionCommand>,
+    pub model: Model,
+    pub model_focus: ModelFocus,
+    pub prompt: String,
+    pub stream: bool,
+    pub no_context: bool,
+    pub provider: Provider,
+}
+
+impl TryFrom<(&SessionCommand, &Config)> for SessionOptions {
+    type Error = SessionError;
+
+    fn try_from((command, config): (&SessionCommand, &Config)) -> Result<Self, Self::Error> {
+        let file = command.completion.load_session_file::<SessionCommand>(config, command.clone());
+        let completion = if file.file.is_some() {
+            command.completion.merge(&file.overrides.completion)
+        } else {
+            command.completion.clone()
+        };
+
+        completion.validate()?;
+
+        Ok(SessionOptions {
+            ai_responds_first: completion.ai_responds_first.unwrap_or(false),
+            stream: completion.parse_stream_option()?,
+            prompt: command.parse_prompt_option(),
+            no_context: command.parse_no_context_option(),
+            model: command.model.unwrap_or(Model::XXLarge),
+            model_focus: command.model_focus.unwrap_or(ModelFocus::Text),
+            provider: command.provider.unwrap_or(Provider::OpenAI),
+            completion,
+            file
+        })
     }
 }
 
@@ -141,106 +88,54 @@ impl SessionResultExt for SessionResult {
 
 #[derive(From, Debug)]
 pub enum SessionError {
-    AppendRequiresSession,
-    AppendsClash,
-    AppendAndAiRespondsFirstIsNonsensical,
-    QuietRequiresSession,
     NoMatchingModel,
-    OverwriteRequiresSession,
-    PromptCantainsNoTranscript,
     TemperatureOutOfValidRange,
-    ZeroResponseCountIsNonsensical,
+    ClashingArguments(ClashingArgumentsError),
     CohereError(CohereError),
     OpenAIError(OpenAIError),
+    IOError(std::io::Error),
     DeserializeError(reqwest::Error),
 }
 
 impl SessionCommand {
-    pub fn new_from_name(name: &str, config: &Config) -> Self {
-        SessionCommand {
-            name: name.clone().to_owned().into(),
-            ..SessionCommand::default()
-        }
-    }
-
     #[async_recursion]
-    pub async fn run(&mut self, client: &Client, config: &Config) -> SessionResult {
-        self.validate()?;
-
-        let mut sequences = match &self.sequence {
-            None => vec![],
-            Some(sequences) => sequences.first().unwrap().split(",")
-                .map(|name| SessionCommand::new_from_name(name.trim(), config))
-                .collect::<Vec<SessionCommand>>(),
-        };
-
-        self.no_context = Some(self.parse_no_context());
-        self.prompt = Some(self.parse_prompt());
-
-        if !self.prompt.as_ref().unwrap().contains("${TRANSCRIPT}") {
-            return Err(SessionError::PromptCantainsNoTranscript);
-        }
-
-
-        if self.print_default_prompts {
-            print_default_prompts();
-            return Ok(vec![]);
-        }
-        let (mut current_transcript, mut session_file) = self.load_session_file(config);
-
-        self.prefix_user = self.prefix_user.clone().or_else(|| match self.prompt.as_deref() {
-            Some(DEFAULT_CHAT_PROMPT_WRAPPER) => Some(String::from("HUMAN: ")),
-            _ => None
-        });
-        self.prefix_ai = self.prefix_ai.clone().or_else(|| match self.prompt.as_deref() {
-            Some(DEFAULT_CHAT_PROMPT_WRAPPER) => Some(String::from("AI: ")),
-            _ => None
-        });
+    pub async fn run(&self, client: &Client, config: &Config) -> SessionResult {
+        let mut options = SessionOptions::try_from((self, config))?;
+        let prefix_user = options.completion.prefix_user.as_ref().map(|u| &**u);
 
         // The commands need to be instantiated before printing the opening prompt because they can
         // print warnings about mismatched options without failing.
-        let command = match self.provider {
-            Provider::OpenAI => Ok(OpenAISessionCommand::try_from(&*self)?),
-            Provider::Cohere => Err(CohereSessionCommand::try_from(&*self)?),
+        let command = match options.provider {
+            Provider::OpenAI => Ok(OpenAISessionCommand::try_from(&options)?),
+            Provider::Cohere => Err(CohereSessionCommand::try_from(&options)?),
         };
 
-        //print_opening_prompt(&self, &current_transcript);
+        let print_output = !options.completion.quiet.unwrap_or(false);
+        if print_output && options.file.transcript.len() > 0 {
+            println!("{}", options.file.transcript);
+        }
 
-        let mut line = if !self.ai_responds_first {
-            let line = self.append_string.clone()
-                .or_else(|| read_next_user_line(self.prefix_user.as_ref()));
-
-            match line {
-                Some(ref line) => match &self.prefix_user {
-                    None => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
-                    Some(prefix) => {
-                        let combined = format!("{}{}", prefix, line);
-                        write_next_line(&combined, &mut current_transcript, session_file.as_mut());
-                    },
-                },
-                None => return Ok(vec![]),
-            }
-            line
+        let line = if options.ai_responds_first {
+            String::new()
         } else {
-            Some(String::new())
+            let append = options.completion.append.as_ref().map(|a| &**a);
+
+            if let Some(line) = options.file.read(append, prefix_user) {
+                line
+            } else {
+                return Ok(vec![]);
+            }
         };
 
         loop {
-            for mut sequence in sequences.iter_mut() {
-                sequence.append_string = Some(current_transcript.clone());
-                sequence.quiet = true;
-                sequence.prefix_user = None;
-                sequence.prefix_ai = None;
-
-                current_transcript = sequence.run(client, config).await?.first().cloned().unwrap();
-            }
-            let prompt = self.prompt.as_ref().unwrap();
-            let prompt = match (self.no_context.unwrap(), &self.prefix_ai) {
-                (true, None) => prompt.replace("${TRANSCRIPT}", &line.unwrap()),
-                (true, Some(prefix)) => prompt.replace("${TRANSCRIPT}", &line.unwrap()) + &prefix,
-                (false, None) => prompt.replace("${TRANSCRIPT}", &current_transcript),
+            let transcript = &options.file.transcript;
+            let prompt = &options.prompt;
+            let prompt = match (options.no_context, &options.completion.prefix_ai) {
+                (true, None) => prompt.replace("${TRANSCRIPT}", &line),
+                (true, Some(prefix)) => prompt.replace("${TRANSCRIPT}", &line) + &prefix,
+                (false, None) => prompt.replace("${TRANSCRIPT}", transcript),
                 (false, Some(prefix)) =>
-                    prompt.replace("${TRANSCRIPT}", &current_transcript) + &prefix
+                    prompt.replace("${TRANSCRIPT}", transcript) + &prefix
             };
 
             let result = match &command {
@@ -248,180 +143,43 @@ impl SessionCommand {
                 Err(command) => command.run(client, config, &prompt).await?,
             };
 
-            if let Some(count) = self.response_count {
+            if let Some(count) = options.completion.response_count {
                 if count > 1 {
                     return Ok(result);
                 }
             }
 
             let text = result.first().unwrap().trim();
-            let written_response = match &self.prefix_ai {
+            let written_response = match &options.completion.prefix_ai {
                 Some(prefix) => format!("{}{}", prefix, text),
                 None => text.to_owned()
             };
-            write_next_line(&written_response, &mut current_transcript, session_file.as_mut());
+            let text = options.file.write(text.into())?;
 
-            if !self.quiet {
+            if !options.completion.quiet.unwrap_or(false) {
                 println!("{}", written_response);
             }
 
-            if self.append || self.append_string.is_some() {
+            if options.completion.append.is_some() {
                 return Ok(vec![ text.to_string() ]);
             }
 
-            line = read_next_user_line(self.prefix_user.as_ref());
-            match line {
-                None => return Ok(vec![]),
-                Some(ref line) => match &self.prefix_user {
-                    None => write_next_line(&line, &mut current_transcript, session_file.as_mut()),
-                    Some(prefix) => {
-                        let combined = format!("{}{}", prefix, line);
-                        write_next_line(&combined, &mut current_transcript, session_file.as_mut());
-                    }
-                }
+            if let None = options.file.read(None, prefix_user) {
+                return Ok(vec![]);
             }
         }
     }
 
-    fn load_session_file(&mut self, config: &Config) -> (String, Option<File>) {
-        let session_dir = {
-            let mut dir = config.dir.clone();
-            dir.push("sessions");
-            dir
-        };
-        fs::create_dir_all(&session_dir).expect("Config directory could not be created");
-
-        if self.overwrite {
-            let path = {
-                let mut path = session_dir.clone();
-                path.push(self.name.as_ref().unwrap());
-                path
-            };
-            let file = OpenOptions::new().write(true).truncate(true).open(path);
-            if let Ok(mut session_file) = file {
-                session_file.write_all(b"").expect("Unable to write to session file");
-                session_file.flush().expect("Unable to write to session file");
-            }
-        }
-
-        let mut current_transcript = String::new();
-        let session_file: Option<File> = if let Some(name) = self.name.clone() {
-            let path = {
-                let mut path = session_dir.clone();
-                path.push(name);
-                path
-            };
-
-            match fs::read_to_string(&path) {
-                Ok(mut session_config) => {
-                    let divider_index = session_config.find("<->")
-                        .expect("Valid session files have a <-> divider");
-
-                    current_transcript = session_config
-                        .split_off(divider_index + 4)
-                        .trim()
-                        .to_string();
-                    session_config.split_off(divider_index);
-
-                    let config: SessionCommand = serde_yaml::from_str(&session_config)
-                        .expect("Serializing self to yaml config should work 100% of the time");
-
-                    self.override_config_with_saved_session(config);
-
-                    Some(OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open(path)
-                        .expect("Unable to open session file")
-                    )
-                },
-                Err(_) => {
-                    let config = serde_yaml::to_string(self)
-                        .expect("Serializing self to yaml config should work 100% of the time");
-
-                    let mut file = OpenOptions::new()
-                        .append(true)
-                        .create(true)
-                        .open(path)
-                        .expect("Unable to open session file");
-
-                    if let Err(e) = writeln!(file, "{}<->", &config) {
-                        eprintln!("Couldn't write new configuration to file: {}", e);
-                    }
-
-                    Some(file)
-                }
-            }
-        } else {
-            None
-        };
-
-        return (current_transcript, session_file)
-    }
-
-    fn override_config_with_saved_session(&mut self, saved: SessionCommand) {
-        if saved.prompt.is_some() {
-            self.prompt = saved.prompt;
-        }
-        if saved.no_context.unwrap_or(false) {
-            self.no_context = Some(true);
-        }
-        /*
-        self.ai_responds_first = saved.ai_responds_first;
-        self.append = saved.append;
-        self.append_string = saved.append_string;
-        self.model = saved.model;
-        self.model_focus = saved.model_focus;
-        self.temperature = saved.temperature;
-        self.name = saved.name;
-        self.overwrite = saved.overwrite;
-        self.prompt = saved.prompt;
-        self.prompt_path = saved.prompt_path;
-        self.no_context = saved.no_context;
-        self.quiet = saved.quiet;
-        self.prefix_user = saved.prefix_user;
-        self.prefix_ai = saved.prefix_ai;
-        */
-    }
-
-    fn validate(&self) -> Result<(), SessionError> {
-        if self.name.is_none() {
-            if self.append {
-                return Err(SessionError::AppendRequiresSession);
-            }
-
-            if self.overwrite {
-                return Err(SessionError::OverwriteRequiresSession);
-            }
-        }
-
-        if self.append_string.is_some() && self.append {
-            return Err(SessionError::AppendsClash);
-        }
-
-        if self.ai_responds_first && self.append_string.is_some() {
-            return Err(SessionError::AppendAndAiRespondsFirstIsNonsensical);
-        }
-
-        if let Some(count) = self.response_count {
-            if count == 0 {
-                return Err(SessionError::ZeroResponseCountIsNonsensical);
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn parse_no_context(&self) -> bool {
-        self.no_context.unwrap_or_else(|| {
+    pub fn parse_no_context_option(&self) -> bool {
+        self.completion.no_context.unwrap_or_else(|| {
             match self.model_focus {
-                ModelFocus::Text => false,
-                ModelFocus::Code => true,
+                Some(ModelFocus::Code) => true,
+                _ => false,
             }
         })
     }
 
-    pub fn parse_prompt(&self) -> String {
+    pub fn parse_prompt_option(&self) -> String {
         self.prompt
             .clone()
             .or_else(|| {
@@ -433,8 +191,8 @@ impl SessionCommand {
             })
             .unwrap_or_else(|| {
                 match self.model_focus {
-                    ModelFocus::Text => DEFAULT_CHAT_PROMPT_WRAPPER.to_owned(),
-                    ModelFocus::Code => DEFAULT_CODE_PROMPT_WRAPPER.to_owned(),
+                    Some(ModelFocus::Text) | None => DEFAULT_CHAT_PROMPT_WRAPPER.to_owned(),
+                    Some(ModelFocus::Code) => DEFAULT_CODE_PROMPT_WRAPPER.to_owned(),
                 }
             })
     }
@@ -479,70 +237,6 @@ pub enum ModelFocus {
     Text
 }
 
-fn print_opening_prompt(args: &SessionCommand, session_file: &str) {
-    if args.append {
-        return;
-    }
-
-    if args.quiet {
-        return;
-    }
-
-    if session_file.len() > 0 {
-        println!("{}", session_file);
-    } else {
-        match &args.prompt {
-            Some(_) => {
-                println!(concat!(
-                    "\nHello, I'm an AI using a {} model. ",
-                    "The prompt used is:\n\n"),
-                    args.model.to_possible_value().unwrap().get_name()
-                );
-                println!("\nWith prompt:\n {}", args.parse_prompt().replace("${TRANSCRIPT}", ""));
-            },
-            None => {
-                println!(concat!("\n",
-                    "Hello, I'm an AI using a {} model. ",
-                    "Ask me anything."),
-                    args.model.to_possible_value().unwrap().get_name()
-                );
-            }
-        }
-    }
-}
-
-fn print_default_prompts() {
-    println!(concat!(
-        "\n",
-        "The default prompt for chat models is:\n",
-        "----------------------------------------\n",
-        "{}\n\n",
-        "________________________________________\n\n",
-        "And the default for code prompts is:\n",
-        "----------------------------------\n\n",
-        "{}\n"),
-        DEFAULT_CHAT_PROMPT_WRAPPER, DEFAULT_CODE_PROMPT_WRAPPER);
-}
-
-fn read_next_user_line(prefix_user: Option<&String>) -> Option<String> {
-    let mut rl = rustyline::Editor::<()>::new().expect("Failed to create rusty line editor");
-    let default = String::new();
-    let prefix = prefix_user.unwrap_or(&default);
-
-    match rl.readline(prefix) {
-        Ok(line) => Some(String::from("") + line.trim_end()),
-        Err(_) => None
-    }
-}
-
-fn write_next_line(line: &str, transcript: &mut String, mut session_file: Option<&mut File>) {
-    if let Some(ref mut file) = session_file {
-        if let Err(e) = writeln!(file, "{}", line) {
-            eprintln!("Couldn't write to file: {}", e);
-        }
-    }
-    *transcript += line;
-}
 
 const DEFAULT_CODE_PROMPT_WRAPPER: &str = "${TRANSCRIPT}";
 const DEFAULT_CHAT_PROMPT_WRAPPER: &str = "
