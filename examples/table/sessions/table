@@ -1,0 +1,18 @@
+ai_responds_first: null
+append: null
+temperature: null
+name: table
+no_context: true
+once: true
+overwrite: null
+quiet: null
+prefix_ai: null
+prefix_user: null
+response_count: null
+stream: false
+tokens_max: null
+tokens_balance: null
+system: Answer this question with a yes or no answer. Is this input valid JSON that can be used with NodeJS's console.table method cleanly?
+<->
+USER: {"foo":"bar"}
+AI: Yes.

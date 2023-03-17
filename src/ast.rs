@@ -1,3 +1,24 @@
+use serde::Deserialize;
+
+#[derive(Debug, PartialEq)]
+pub struct Program {
+    pub prompts: Vec<Prompt>
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Prompt {
+    pub name: String,
+    pub options: PromptOptions,
+    pub statements: Vec<Statement>
+}
+
+#[derive(Debug, Default, PartialEq, Deserialize)]
+pub struct PromptOptions {
+    pub eager: Option<bool>,
+    pub history: Option<bool>,
+    pub system: Option<String>,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum Statement {
     MatchStatement(MatchStatement),

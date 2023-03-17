@@ -1,7 +1,7 @@
 use super::ast::*;
 
 peg::parser! {
-    grammar parser() for str {
+    pub grammar parse() for str {
         rule _() = [' ' | '\t' | '\r' | '\n']*
 
         rule variable_char() -> char
@@ -10,14 +10,6 @@ peg::parser! {
         pub rule variable() -> Variable
             = "$" chars:variable_char()+ { 
                 Variable(chars.into_iter().collect::<String>())
-            }
-
-        pub rule prompt_call() -> PromptCall
-            = call:variable_char()+ awaited:".await"? { 
-                PromptCall {
-                    call: call.into_iter().collect::<String>(),
-                    awaited: awaited.is_some()
-                }
             }
 
         pub rule regex() -> Regex
@@ -51,6 +43,34 @@ peg::parser! {
                 }
             }
 
+        pub rule prompt_name() -> String
+            = name:variable_char()+ { name.into_iter().collect::<String>() }
+
+        pub rule prompt_call() -> PromptCall
+            = name:prompt_name() awaited:".await"? { 
+                PromptCall {
+                    call: name,
+                    awaited: awaited.is_some()
+                }
+            }
+
+        pub rule prompt() -> Result<Prompt, serde_yaml::Error>
+            = _ name:prompt_name() _ yaml:$(!"{" [_])* _ "{" _ statements:statements() _ "}" _ {
+                let yaml = yaml
+                    .into_iter()
+                    .collect::<String>()
+                    .lines()
+                    .map(|l| format!("{}\n", l.trim_start()))
+                    .collect::<String>();
+                    
+                let options = match yaml.len() {
+                    0 => PromptOptions::default(),
+                    _ => serde_yaml::from_str(&yaml)?
+                };
+
+                Ok(Prompt { name, options, statements })
+            }
+
         pub rule statement() -> Statement
             = s:match_statement() _ { Statement::MatchStatement(s) }
             / s:prompt_call() _ { Statement::PromptCall(s) }
@@ -58,6 +78,12 @@ peg::parser! {
 
         pub rule statements() -> Vec<Statement>
             = _ statements:(statement()) ** _ { statements }
+
+        pub rule program() -> Result<Program, serde_yaml::Error>
+            = _ prompts:prompt()* _ {
+                let prompts = prompts.into_iter().collect::<Result<Vec<_>, serde_yaml::Error>>();
+                Ok(Program { prompts: prompts? })
+            }
     }
 }
 
@@ -66,10 +92,64 @@ mod tests {
     use super::*;
     
     #[test]
+    fn parse_program() {
+        let program = r#"
+            bob {}
+            alice {}
+        "#;
+
+        assert_eq!(parse::program(program).unwrap().unwrap(), Program {
+            prompts: vec![
+                Prompt {
+                    name: "bob".into(),
+                    options: PromptOptions::default(),
+                    statements: vec![]
+                },
+                Prompt {
+                    name: "alice".into(),
+                    options: PromptOptions::default(),
+                    statements: vec![]
+                },
+            ]
+        });
+    }
+
+    #[test]
+    fn parse_prompt() {
+        let prompt = r#"
+            table
+                system: "Answer this question with a yes or no answer. Is this input valid JSON that can be used with NodeJS's console.table method cleanly?"
+                no_context: true
+            {
+                match $AI {
+                }
+            }
+        "#;
+
+        assert_eq!(parse::prompt(prompt).unwrap().unwrap(), Prompt {
+            name: "table".into(),
+            options: PromptOptions {
+                eager: None,
+                no_context: Some(true),
+                system: Some(
+                    "Answer this question with a yes or no answer. Is this input valid JSON \
+                    that can be used with NodeJS's console.table method cleanly?".into()
+                )
+            },
+            statements: vec![
+                Statement::MatchStatement(MatchStatement {
+                    variable: Variable(String::from("AI")),
+                    cases: vec![]
+                })
+            ]
+        });
+    }
+
+    #[test]
     fn parse_match_statement_with_no_actions() {
         let match_statement = "match $variable {}";
 
-        assert_eq!(parser::match_statement(match_statement).unwrap(), MatchStatement {
+        assert_eq!(parse::match_statement(match_statement).unwrap(), MatchStatement {
             variable: Variable(String::from("variable")),
             cases: vec![]
         });
@@ -82,7 +162,7 @@ mod tests {
             /^no/i => `handle_error`
         }";
 
-        assert_eq!(parser::match_statement(match_statement).unwrap(), MatchStatement {
+        assert_eq!(parse::match_statement(match_statement).unwrap(), MatchStatement {
             variable: Variable(String::from("variable")),
             cases: vec![
                 MatchCase {
@@ -104,7 +184,7 @@ mod tests {
     fn parse_prompt_call() {
         let prompt_call = "foo.await";
         assert_eq!(
-            parser::prompt_call(prompt_call).unwrap(),
+            parse::prompt_call(prompt_call).unwrap(),
             PromptCall {
                 call: String::from("foo"),
                 awaited: true
@@ -113,7 +193,7 @@ mod tests {
 
         let prompt_call = "bar";
         assert_eq!(
-            parser::prompt_call(prompt_call).unwrap(),
+            parse::prompt_call(prompt_call).unwrap(),
             PromptCall {
                 call: String::from("bar"),
                 awaited: false
@@ -121,14 +201,14 @@ mod tests {
         );
 
         let prompt_call = "$_invalid";
-        assert!(parser::prompt_call(prompt_call).is_err());
+        assert!(parse::prompt_call(prompt_call).is_err());
     }
 
     #[test]
     fn parse_pipe_statement() {
         let pipe_statement = "$LINE => foo";
         assert_eq!(
-            parser::pipe_statement(pipe_statement).unwrap(),
+            parse::pipe_statement(pipe_statement).unwrap(),
             PipeStatement {
                 variable: Variable(String::from("LINE")),
                 prompt_call: PromptCall {
@@ -150,7 +230,7 @@ mod tests {
             $bar => baz
         "#;
 
-        assert_eq!(parser::statements(input).unwrap(), vec![
+        assert_eq!(parse::statements(input).unwrap(), vec![
             Statement::MatchStatement(MatchStatement {
                 variable: Variable(String::from("variable")),
                 cases: vec![
