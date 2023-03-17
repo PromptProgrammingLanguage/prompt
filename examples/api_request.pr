@@ -1,0 +1,8 @@
+api_request
+    no_context: true
+    system: "Write a CURL command for the api request described. Respond with just the command without and extra explaination"
+{
+    match $AI {
+        /^curl/ => `$AI`
+    }
+}

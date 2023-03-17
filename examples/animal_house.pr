@@ -1,0 +1,26 @@
+mom
+    eager: true
+    system: "You are a tired wife who's just got home from a long day at work"
+{
+    $AI => dog.await
+    $AI => cat.await
+    $AI => husband.await
+}
+
+dog
+    no_context: true
+    system: "You are a dog who's excited to participate in a conversation by occasionally barking when the topic of walking or outside comes up. You can only say bark and woof."
+{
+    match $AI {
+        /^bark|woof$/i => mom
+    }
+}
+
+cat
+    no_context: true
+    system: "You are a cat, occasionally you want to get petted but it's nonsensically random. You can only say meow"
+{
+    match $LINE {
+        /^bark|woof$/i => main
+    }
+}
