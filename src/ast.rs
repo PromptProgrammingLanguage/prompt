@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use regex::Regex;
 
 #[derive(Debug, PartialEq)]
 pub struct Program {
@@ -32,15 +33,21 @@ pub struct MatchStatement {
     pub cases: Vec<MatchCase>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug)]
 pub struct MatchCase {
     pub regex: Regex,
     pub action: MatchAction,
 }
 
+impl PartialEq for MatchCase {
+    fn eq(&self, other: &MatchCase) -> bool {
+        return &self.action == &other.action && self.regex.as_str() == other.regex.as_str()
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum MatchAction {
-    BashCommand(BashCommand),
+    Command(Command),
     PromptCall(PromptCall)
 }
 
@@ -57,10 +64,7 @@ pub struct PromptCall {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct BashCommand(pub String);
+pub struct Command(pub String);
 
 #[derive(Debug, PartialEq)]
 pub struct Variable(pub String);
-
-#[derive(Debug, PartialEq)]
-pub struct Regex(pub String);

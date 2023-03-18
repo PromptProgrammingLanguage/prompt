@@ -1,8 +1,9 @@
 use super::ast::*;
+use regex::Regex;
 
 peg::parser! {
     pub grammar parse() for str {
-        rule _() = [' ' | '\t' | '\r' | '\n']*
+        rule _() = quiet!{[' ' | '\t' | '\r' | '\n']*}
 
         rule variable_char() -> char
             = ['a'..='z' | 'A'..='Z' | '0'..='9' | '_']
@@ -13,23 +14,33 @@ peg::parser! {
             }
 
         pub rule regex() -> Regex
-            = "/" regex_body:$(!"/" [_])* "/" regex_flags:$(['i' | 'm' | 's' | 'x']*) {
-                Regex(format!("/{}/{}", regex_body.into_iter().collect::<String>(), regex_flags))
-            }
+            = quiet!{ re:regex_nested() {
+                Regex::new(&re).unwrap()
+            }}
+            / expected!("Regular Expression")
 
-        pub rule bash_command() -> BashCommand
-            = "`" bash_command_body:$(!"`" [_])* "`" { 
-                BashCommand(bash_command_body.into_iter().collect::<String>())
+        rule regex_nested() -> String
+            = "(" b:$([^'('|')']*) n:regex_nested() a:$([^'('|')']*) ")" {
+                format!("({b}{n}{a})")
+            }
+            / "(" c:$([^')']*) ")" { format!("({c})") }
+
+        pub rule command() -> Command
+            = "`" command_body:$(!"`" [_])* "`" {
+                Command(command_body.into_iter().collect::<String>())
             }
 
         pub rule match_statement() -> MatchStatement
-            = "match" _ variable:variable() _ "{" _ cases:match_case() ** "," _ "}" _ {
+            = "match" _ variable:variable() _ "{" cases:match_cases() "}" _ {
                 MatchStatement { variable, cases }
             }
 
-        rule match_case() -> MatchCase
-            = _ regex:regex() _ "=>" _ bash_command:bash_command() _ {
-                MatchCase { regex, action: MatchAction::BashCommand(bash_command) } 
+        pub rule match_cases() -> Vec<MatchCase>
+            = _ cases:match_case() ** "," _  { cases }
+
+        pub rule match_case() -> MatchCase
+            = _ regex:regex() _ "=>" _ command:command() _ {
+                MatchCase { regex, action: MatchAction::Command(command) }
             }
             / _ regex:regex() _ "=>" _ prompt_call:prompt_call() _ {
                 MatchCase { regex, action: MatchAction::PromptCall(prompt_call) } 
@@ -114,36 +125,6 @@ mod tests {
         });
     }
 
-    #[test]
-    fn parse_prompt() {
-        let prompt = r#"
-            table
-                system: "Answer this question with a yes or no answer. Is this input valid JSON that can be used with NodeJS's console.table method cleanly?"
-                no_context: true
-            {
-                match $AI {
-                }
-            }
-        "#;
-
-        assert_eq!(parse::prompt(prompt).unwrap().unwrap(), Prompt {
-            name: "table".into(),
-            options: PromptOptions {
-                eager: None,
-                no_context: Some(true),
-                system: Some(
-                    "Answer this question with a yes or no answer. Is this input valid JSON \
-                    that can be used with NodeJS's console.table method cleanly?".into()
-                )
-            },
-            statements: vec![
-                Statement::MatchStatement(MatchStatement {
-                    variable: Variable(String::from("AI")),
-                    cases: vec![]
-                })
-            ]
-        });
-    }
 
     #[test]
     fn parse_match_statement_with_no_actions() {
@@ -158,26 +139,49 @@ mod tests {
     #[test]
     fn parse_match_statement() {
         let match_statement = "match $variable {
-            /^yes/i => go_ahead,
-            /^no/i => `handle_error`
+            (?i:^yes) => go_ahead,
+            (?i:^no) => `handle_error`
         }";
 
         assert_eq!(parse::match_statement(match_statement).unwrap(), MatchStatement {
             variable: Variable(String::from("variable")),
             cases: vec![
                 MatchCase {
-                    regex: Regex(String::from("/^yes/i")),
+                    regex: Regex::new("(?i:^yes)").unwrap(),
                     action: MatchAction::PromptCall(PromptCall {
                         call: String::from("go_ahead"),
                         awaited: false
                     })
                 },
                 MatchCase {
-                    regex: Regex(String::from("/^no/i")),
-                    action: MatchAction::BashCommand(BashCommand(String::from("handle_error")))
+                    regex: Regex::new("(?i:^no)").unwrap(),
+                    action: MatchAction::Command(Command(String::from("handle_error")))
                 },
             ]
         });
+    }
+
+    #[test]
+    fn parse_regex() {
+        assert_eq!(
+            parse::regex("(^foo)").unwrap().as_str(),
+            Regex::new("(^foo)").unwrap().as_str()
+        );
+
+        assert_eq!(
+            parse::regex("((?i)^foo)").unwrap().as_str(),
+            Regex::new("((?i)^foo)").unwrap().as_str()
+        );
+
+        assert_eq!(
+            parse::regex("((?i):^yes)").unwrap().as_str(),
+            Regex::new("((?i):^yes)").unwrap().as_str()
+        );
+
+        assert_eq!(
+            parse::regex("(?i:^yes)").unwrap().as_str(),
+            Regex::new("(?i:^yes)").unwrap().as_str()
+        );
     }
 
     #[test]
@@ -205,6 +209,36 @@ mod tests {
     }
 
     #[test]
+    fn parse_prompt() {
+        let prompt = r#"
+            table
+                history: false
+                system: "Answer this question with a yes or no answer. Is this input valid JSON that can be used with NodeJS's console.table method cleanly?"
+            {
+                match $AI {}
+            }
+        "#;
+
+        assert_eq!(parse::prompt(prompt).unwrap().unwrap(), Prompt {
+            name: "table".into(),
+            options: PromptOptions {
+                eager: None,
+                history: Some(false),
+                system: Some(
+                    "Answer this question with a yes or no answer. Is this input valid JSON \
+                    that can be used with NodeJS's console.table method cleanly?".into()
+                )
+            },
+            statements: vec![
+                Statement::MatchStatement(MatchStatement {
+                    variable: Variable(String::from("AI")),
+                    cases: vec![]
+                })
+            ]
+        });
+    }
+
+    #[test]
     fn parse_pipe_statement() {
         let pipe_statement = "$LINE => foo";
         assert_eq!(
@@ -223,8 +257,8 @@ mod tests {
     fn parse_multiple_different_statement() {
         let input = r#"
             match $variable {
-                /^yes/i => go_ahead,
-                /^no/i => `handle_error`
+                (?i:yes) => go_ahead,
+                (?i:no) => `handle_error`
             }
             foo.await
             $bar => baz
@@ -235,15 +269,15 @@ mod tests {
                 variable: Variable(String::from("variable")),
                 cases: vec![
                     MatchCase {
-                        regex: Regex(String::from("/^yes/i")),
+                        regex: Regex::new("(?i:yes)").unwrap(),
                         action: MatchAction::PromptCall(PromptCall {
                             call: String::from("go_ahead"),
                             awaited: false
                         })
                     },
                     MatchCase {
-                        regex: Regex(String::from("/^no/i")),
-                        action: MatchAction::BashCommand(BashCommand(String::from("handle_error")))
+                        regex: Regex::new("(?i:no)").unwrap(),
+                        action: MatchAction::Command(Command(String::from("handle_error")))
                     },
                 ]
             }),

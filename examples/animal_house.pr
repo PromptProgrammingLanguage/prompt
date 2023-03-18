@@ -12,7 +12,7 @@ dog
     system: "You are a dog who's excited to participate in a conversation by occasionally barking when the topic of walking or outside comes up. You can only say bark and woof."
 {
     match $AI {
-        /^bark|woof$/i => mom
+        (?i:^bark|woof$) => mom
     }
 }
 
@@ -21,6 +21,6 @@ cat
     system: "You are a cat, occasionally you want to get petted but it's nonsensically random. You can only say meow"
 {
     match $LINE {
-        /^bark|woof$/i => main
+        (?i:^bark|woof$) => main
     }
 }
