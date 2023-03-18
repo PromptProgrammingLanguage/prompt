@@ -5,19 +5,19 @@ peg::parser! {
     pub grammar parse() for str {
         rule _() = quiet!{[' ' | '\t' | '\r' | '\n']*}
 
-        rule variable_char() -> char
-            = ['a'..='z' | 'A'..='Z' | '0'..='9' | '_']
+        rule variable_char() -> String
+            = s:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) { s.to_string() }
 
         pub rule variable() -> Variable
-            = "$" chars:variable_char()+ { 
-                Variable(chars.into_iter().collect::<String>())
+            = "$" var:variable_char() {
+                Variable(var)
             }
 
         pub rule regex() -> Regex
             = quiet!{ re:regex_nested() {
                 Regex::new(&re).unwrap()
             }}
-            / expected!("Regular Expression")
+            / expected!("Valid regular Expression")
 
         rule regex_nested() -> String
             = "(" b:$([^'('|')']*) n:regex_nested() a:$([^'('|')']*) ")" {
@@ -26,8 +26,8 @@ peg::parser! {
             / "(" c:$([^')']*) ")" { format!("({c})") }
 
         pub rule command() -> Command
-            = "`" command_body:$(!"`" [_])* "`" {
-                Command(command_body.into_iter().collect::<String>())
+            = "`" command_body:$([^'`']*) "`" {
+                Command(command_body.to_string())
             }
 
         pub rule match_statement() -> MatchStatement
@@ -35,10 +35,10 @@ peg::parser! {
                 MatchStatement { variable, cases }
             }
 
-        pub rule match_cases() -> Vec<MatchCase>
+        rule match_cases() -> Vec<MatchCase>
             = _ cases:match_case() ** "," _  { cases }
 
-        pub rule match_case() -> MatchCase
+        rule match_case() -> MatchCase
             = _ regex:regex() _ "=>" _ command:command() _ {
                 MatchCase { regex, action: MatchAction::Command(command) }
             }
@@ -66,10 +66,9 @@ peg::parser! {
             }
 
         pub rule prompt() -> Result<Prompt, serde_yaml::Error>
-            = _ name:prompt_name() _ yaml:$(!"{" [_])* _ "{" _ statements:statements() _ "}" _ {
+            = _ name:prompt_name() _ yaml:$([^'{']*) _ "{" _ statements:statements() _ "}" _ {
                 let yaml = yaml
-                    .into_iter()
-                    .collect::<String>()
+                    .to_string()
                     .lines()
                     .map(|l| format!("{}\n", l.trim_start()))
                     .collect::<String>();
@@ -92,8 +91,9 @@ peg::parser! {
 
         pub rule program() -> Result<Program, serde_yaml::Error>
             = _ prompts:prompt()* _ {
-                let prompts = prompts.into_iter().collect::<Result<Vec<_>, serde_yaml::Error>>();
-                Ok(Program { prompts: prompts? })
+                let prompts = prompts.into_iter().collect::<Result<Vec<_>, serde_yaml::Error>>()?;
+
+                Ok(Program { prompts })
             }
     }
 }
