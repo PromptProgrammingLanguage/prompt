@@ -2,6 +2,7 @@ mod ast;
 mod parser;
 mod eval;
 
+use clap::Parser;
 use reqwest::{Client,ClientBuilder,header::HeaderMap,header::HeaderValue};
 use eval::{Evaluator,EvaluatorConfig};
 use std::env;
@@ -12,6 +13,8 @@ use std::process::Command;
 async fn main() {
     let api_key = env::var("AI_API_KEY")
         .expect("AI_API_KEY environment variable is missing");
+
+    let args = PromptArgs::parse();
 
     let client = {
         let mut headers = HeaderMap::new();
@@ -28,9 +31,16 @@ async fn main() {
         client,
         config: EvaluatorConfig {
             api_key,
-            prompt_path: PathBuf::from("./examples/table.pr"),
+            prompt_path: args.path,
         }
     };
 
     eval.eval().await;
+}
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct PromptArgs {
+    /// Path to the main prompt file
+    path: PathBuf
 }
