@@ -41,29 +41,23 @@ impl Evaluator {
         let file = fs::read_to_string(&self.config.prompt_path)
             .expect(&format!("Failed to open {}", "fooabr"));
 
-        let folder_name = self.config.prompt_path.file_stem().unwrap().to_str().unwrap().to_string();
-        let output_dir = {
-            let path = self.config.prompt_path.clone();
-            let parent = path.parent().clone().unwrap();
-
-            path.parent().unwrap().join(&folder_name)
-        };
-
-        if !output_dir.exists() {
-            fs::create_dir(&output_dir).expect("Could not create output dir");
-        }
-
         let program = parser::parse::program(&file)
             .expect("Couldn't parse the prompt program correctly")
             .expect("Couldn't parse the prompt program correctly");
 
         let config = Config {
             api_key: Some(self.config.api_key.clone()),
-            dir: output_dir,
+            dir: self.config.prompt_path.parent().unwrap().to_path_buf(),
             ..Config::default()
         };
 
-        evaluate_prompt(program.prompts.first().unwrap(), &self.client, &config).await
+        let result = evaluate_prompt(program.prompts.first().unwrap(), &self.client, &config).await;
+        match &result {
+            Ok(r) => println!("{}", r),
+            Err(e) => eprintln!("{:#?}", e)
+        }
+
+        result
     }
 }
 
