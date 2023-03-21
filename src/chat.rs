@@ -3,6 +3,7 @@ use clap::{Args};
 use serde::{Serialize,Deserialize};
 use reqwest::Client;
 use derive_more::From;
+use tiktoken_rs::p50k_base;
 use crate::openai::chat::OpenAIChatCommand;
 use crate::openai::OpenAIError;
 use crate::completion::{CompletionOptions,CompletionFile,ClashingArgumentsError};
@@ -27,7 +28,7 @@ impl ChatCommand {
         let print_output = !options.completion.quiet.unwrap_or(false);
 
         if print_output && options.file.transcript.len() > 0 {
-            println!("{}", options.file.transcript);
+            print!("{}", options.file.transcript);
         }
 
         if !options.ai_responds_first {
@@ -90,17 +91,6 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
     }
 }
 
-pub type ChatResult = Result<Vec<String>, ChatError>;
-pub trait ChatResultExt {
-    fn single_result(&self) -> Option<&str>;
-}
-
-impl ChatResultExt for ChatResult {
-    fn single_result(&self) -> Option<&str> {
-        self.as_ref().ok().and_then(|r| r.first()).map(|x| &**x)
-    }
-}
-
 #[derive(Debug, From)]
 pub enum ChatError {
     ClashingArguments(ClashingArgumentsError),
@@ -114,3 +104,87 @@ pub enum ChatError {
 
 #[derive(Debug)]
 pub struct ChatTranscriptionError(pub String);
+
+pub type ChatResult = Result<Vec<ChatMessage>, ChatError>;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ChatMessage {
+    pub role: ChatRole,
+    pub content: String,
+    #[serde(skip)]
+    pub tokens: usize
+}
+
+impl ChatMessage {
+    pub fn new(role: ChatRole, content: impl AsRef<str>) -> Self {
+        let tokens = p50k_base().unwrap()
+            .encode_with_special_tokens(&format!("{}{}", role, content.as_ref()))
+            .len();
+
+        ChatMessage {
+            role,
+            content: content.as_ref().to_string(),
+            tokens
+        }
+    }
+}
+
+pub type ChatMessages = Vec<ChatMessage>;
+pub(crate) trait ChatMessagesInternalExt {
+    fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> where Self: Sized;
+}
+
+impl ChatMessagesInternalExt for ChatMessages {
+    fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> {
+        let tokens_max = options.tokens_max;
+        let tokens_balance = options.tokens_balance;
+        let upper_bound = (tokens_max as f32 * tokens_balance).floor() as usize;
+        let current_token_length: usize = self.iter().map(|m| m.tokens).sum();
+
+        if current_token_length > upper_bound {
+            let system = ChatMessage::new(ChatRole::System, options.system.clone());
+            let mut messages = vec![];
+            let mut remaining = upper_bound.checked_sub(system.tokens)
+                .ok_or_else(|| ChatTranscriptionError(format!(
+                    "Cannot fit your system message into the chat messages list. This means \
+                    that your tokens_max value is either too small or your system message is \
+                    too long. You're upper bound on transcript tokens is {upper_bound} and \
+                    your system message has {} tokens", system.tokens)))?;
+
+            for message in self.iter().skip(1).rev() {
+                match remaining.checked_sub(message.tokens) {
+                    Some(subtracted) => {
+                        remaining = subtracted;
+                        messages.push(message);
+                    },
+                    None => break,
+                }
+            }
+
+            messages.push(&system);
+            Ok(messages.iter().rev().map(|i| i.clone()).cloned().collect())
+        } else {
+            Ok(self.clone())
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub enum ChatRole {
+    #[serde(rename = "assistant")]
+    Ai,
+    #[serde(rename = "user")]
+    User,
+    #[serde(rename = "system")]
+    System
+}
+
+impl std::fmt::Display for ChatRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", match self {
+            Self::Ai => "AI: ",
+            Self::User => "USER: ",
+            Self::System => "SYSTEM: "
+        })
+    }
+}

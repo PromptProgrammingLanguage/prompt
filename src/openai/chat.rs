@@ -1,4 +1,4 @@
-use crate::chat::{ChatOptions,ChatResult,ChatError,ChatTranscriptionError};
+use crate::chat::{ChatOptions,ChatResult,ChatMessage,ChatMessages,ChatMessagesInternalExt,ChatRole,ChatError,ChatTranscriptionError};
 use std::io::{self,Write};
 use async_recursion::async_recursion;
 use serde::{Serialize,Deserialize};
@@ -7,7 +7,6 @@ use reqwest_eventsource::{EventSource,Event};
 use serde_json::json;
 use futures_util::stream::StreamExt;
 use crate::openai::response::OpenAICompletionResponse;
-use tiktoken_rs::p50k_base;
 
 pub struct OpenAIChatCommand {
     options: ChatOptions
@@ -85,8 +84,8 @@ async fn handle_sync(client: &Client, options: &mut ChatOptions, print_output: b
             println!("{}", text);
         }
 
-        if options.completion.append.is_some() {
-            return Ok(vec![ text ]);
+        if options.completion.append.is_some() || options.completion.once.unwrap_or(false) {
+            return Ok(ChatMessages::try_from(&*options)?);
         }
     }
 
@@ -94,12 +93,13 @@ async fn handle_sync(client: &Client, options: &mut ChatOptions, print_output: b
 }
 
 async fn handle_stream(client: &Client, options: &mut ChatOptions) -> ChatResult {
+    let messages = ChatMessages::try_from(&*options)?;
     let post = client.post("https://api.openai.com/v1/chat/completions")
         .json(&json!({
             "model": "gpt-3.5-turbo",
             "temperature": options.temperature,
             "stream": true,
-            "messages": ChatMessages::try_from(&*options)?
+            "messages": messages
         }));
 
     let mut stream = EventSource::new(post).unwrap();
@@ -129,6 +129,10 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions) -> ChatResult
             options.file.write_words(String::from("\n"))?;
             io::stdout().flush().unwrap();
         },
+    }
+
+    if options.completion.append.is_some() || options.completion.once.unwrap_or(false) {
+        return Ok(ChatMessages::try_from(&*options)?);
     }
 
     Ok(vec![])
@@ -204,72 +208,10 @@ pub struct OpenAIChatDelta {
     finish_reason: Option<String>
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub struct ChatMessage {
-    pub role: ChatRole,
-    pub content: String,
-    #[serde(skip)]
-    pub tokens: usize
-}
-
-impl ChatMessage {
-    pub fn new(role: ChatRole, content: impl AsRef<str>) -> Self {
-        let tokens = p50k_base().unwrap()
-            .encode_with_special_tokens(&format!("{}{}", role, content.as_ref()))
-            .len();
-
-        ChatMessage {
-            role,
-            content: content.as_ref().to_string(),
-            tokens
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatMessageDelta {
     pub role: Option<ChatRole>,
     pub content: Option<String>,
-}
-
-pub type ChatMessages = Vec<ChatMessage>;
-trait ChatMessagesInternalExt {
-    fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> where Self: Sized;
-}
-
-impl ChatMessagesInternalExt for ChatMessages {
-    fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> {
-        let tokens_max = options.tokens_max;
-        let tokens_balance = options.tokens_balance;
-        let upper_bound = (tokens_max as f32 * tokens_balance).floor() as usize;
-        let current_token_length: usize = self.iter().map(|m| m.tokens).sum();
-
-        if current_token_length > upper_bound {
-            let system = ChatMessage::new(ChatRole::System, options.system.clone());
-            let mut messages = vec![];
-            let mut remaining = upper_bound.checked_sub(system.tokens)
-                .ok_or_else(|| ChatTranscriptionError(format!(
-                    "Cannot fit your system message into the chat messages list. This means \
-                    that your tokens_max value is either too small or your system message is \
-                    too long. You're upper bound on transcript tokens is {upper_bound} and \
-                    your system message has {} tokens", system.tokens)))?;
-
-            for message in self.iter().skip(1).rev() {
-                match remaining.checked_sub(message.tokens) {
-                    Some(subtracted) => {
-                        remaining = subtracted;
-                        messages.push(message);
-                    },
-                    None => break,
-                }
-            }
-
-            messages.push(&system);
-            Ok(messages.iter().rev().map(|i| i.clone()).cloned().collect())
-        } else {
-            Ok(self.clone())
-        }
-    }
 }
 
 impl TryFrom<&ChatOptions> for ChatMessages {
@@ -321,26 +263,6 @@ impl TryFrom<&ChatOptions> for ChatMessages {
         }
 
         return Ok(messages.labotomize(&options)?);
-    }
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub enum ChatRole {
-    #[serde(rename = "assistant")]
-    Ai,
-    #[serde(rename = "user")]
-    User,
-    #[serde(rename = "system")]
-    System
-}
-
-impl std::fmt::Display for ChatRole {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "{}", match self {
-            Self::Ai => "AI: ",
-            Self::User => "USER: ",
-            Self::System => "SYSTEM: "
-        })
     }
 }
 

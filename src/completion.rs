@@ -30,6 +30,10 @@ pub struct CompletionOptions {
     #[arg(long)]
     pub no_context: Option<bool>,
 
+    /// Only do one question / answer cycle and return the result.
+    #[arg(long)]
+    pub once: Option<bool>,
+
     /// Overwrite the existing session if it already exists
     #[arg(long)]
     pub overwrite: Option<bool>,
@@ -78,6 +82,7 @@ impl CompletionOptions {
             temperature: original.temperature.or(merged.temperature),
             name: original.name.or(merged.name),
             overwrite: original.overwrite.or(merged.overwrite),
+            once: original.once.or(merged.once),
             quiet: original.quiet.or(merged.quiet),
             prefix_ai: original.prefix_ai.or(merged.prefix_ai),
             prefix_user: original.prefix_user.or(merged.prefix_user),
@@ -128,7 +133,7 @@ impl CompletionOptions {
 
                     transcript = session_config
                         .split_off(divider_index + 4)
-                        .trim()
+                        .trim_start()
                         .to_string();
                     session_config.truncate(divider_index);
                     overrides = serde_yaml::from_str(&session_config)

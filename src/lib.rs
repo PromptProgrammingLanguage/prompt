@@ -7,6 +7,7 @@ mod cohere;
 mod config;
 
 pub use config::{Config,DEFAULT_CONFIG_FILE};
+pub use completion::{CompletionOptions};
 pub use session::{SessionCommand,SessionResult,SessionResultExt,SessionError};
 pub use image::{
     ImageCommand,
@@ -21,6 +22,6 @@ pub use image::{
 pub use chat::{
     ChatCommand,
     ChatResult,
-    ChatResultExt,
     ChatError,
+    ChatMessage
 };
