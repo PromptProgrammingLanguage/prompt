@@ -1,106 +1,179 @@
-use ai::{Config,ChatCommand,ChatResult,CompletionOptions};
+use ai::{Config,ChatCommand,ChatError,ChatResult,ChatMessage,ChatRole,CompletionOptions};
 use reqwest::Client;
 use std::fs;
 use std::path::PathBuf;
 use std::process;
+use tokio::task::JoinHandle;
 use regex::{Captures,CaptureNames};
 use super::parser;
 use super::ast::*;
 
-#[derive(Debug)]
-pub struct Evaluator {
+#[derive(Clone, Debug)]
+pub struct Evaluate {
     pub client: Client,
-    pub config: EvaluatorConfig
+    pub config: EvaluateConfig,
+    pub program: Program
 }
 
-#[derive(Debug)]
-pub struct EvaluatorConfig {
+#[derive(Debug, Clone)]
+pub struct EvaluateConfig {
     pub api_key: String,
     pub prompt_path: PathBuf,
+    pub prompt_dir: PathBuf
 }
 
-#[derive(Debug)]
-pub struct EvaluateEnvironment {
+#[derive(Debug, Clone, Default)]
+pub struct EvaluateState {
+    pub vars: EvaluateVars,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct EvaluateVars {
     pub ai: String,
     pub user: String
 }
 
 #[derive(Debug)]
-pub enum EvaluatorError {
+pub enum EvaluateError {
+    Command(String),
+    MissingPrompt(String),
+    UndeclaredVariable(String),
 
 }
 
-pub type EvaluatorResult = Result<String, EvaluatorError>;
+impl Evaluate {
+    pub fn new(client: Client, program: Program, config: EvaluateConfig) -> Self {
+        Self { client, config, program }
+    }
 
-impl Evaluator {
-    pub async fn eval(&self) -> EvaluatorResult {
-        if !self.config.prompt_path.is_file() {
-            panic!("prompt path is not a file");
-        }
-
-        let file = fs::read_to_string(&self.config.prompt_path)
-            .expect(&format!("Failed to open {}", "fooabr"));
-
-        let program = parser::parse::program(&file)
-            .expect("Couldn't parse the prompt program correctly")
-            .expect("Couldn't parse the prompt program correctly");
-
-        let config = Config {
-            api_key: Some(self.config.api_key.clone()),
-            dir: self.config.prompt_path.parent().unwrap().to_path_buf(),
-            ..Config::default()
+    pub async fn eval(&self) -> Result<(), EvaluateError> {
+        let evaluate = &Evaluate {
+            client: self.client.clone(),
+            config: self.config.clone(),
+            program: self.program.clone()
         };
 
-        let result = evaluate_prompt(program.prompts.first().unwrap(), &self.client, &config).await;
-        match &result {
-            Ok(r) => println!("{}", r),
-            Err(e) => eprintln!("{:#?}", e)
-        }
+        let main = evaluate.program.prompts.iter().find(|prompt| prompt.is_main).unwrap();
 
-        result
+        evaluate_prompt(evaluate, main, &ChatCommand {
+            completion: CompletionOptions {
+                ai_responds_first: main.options.eager.clone(),
+                no_context: main.options.history.clone().map(|h| !h),
+                name: Some(main.name.clone()),
+                once: Some(true),
+                stream: Some(false),
+                quiet: Some(true),
+                ..CompletionOptions::default()
+            },
+            system: main.options.system.clone(),
+            direction: main.options.direction.clone()
+        }).await;
+
+
+        Ok(())
     }
 }
 
-async fn evaluate_prompt(prompt: &Prompt, client: &Client, config: &Config) -> EvaluatorResult {
-    let command = ChatCommand {
-        completion: CompletionOptions {
-            ai_responds_first: prompt.options.eager.clone(),
-            no_context: prompt.options.history.clone().map(|h| !h),
-            name: Some(prompt.name.clone()),
-            once: Some(true),
-            stream: Some(false),
-            quiet: Some(true),
-            ..CompletionOptions::default()
-        },
-        system: prompt.options.system.clone()
+async fn evaluate_prompt(
+    evaluator: &Evaluate,
+    prompt: &Prompt,
+    command: &ChatCommand) -> Result<Vec<ChatMessage>, EvaluateError>
+{
+    let Evaluate { client, config, program } = evaluator;
+
+    let config = Config {
+        api_key: Some(config.api_key.clone()),
+        dir: config.prompt_dir.clone(),
+        ..Config::default()
     };
 
-    let mut result = command.run(client, &config).await.unwrap();
-
-    let env = EvaluateEnvironment {
-        ai: result.pop().unwrap().content,
-        user: result.pop().unwrap().content,
+    let result = command.run(client, &config).await.unwrap();
+    let state = EvaluateState {
+        vars: EvaluateVars {
+            ai: result.iter().rev()
+                .find(|message| message.role == ChatRole::Ai)
+                .map(|message| message.content.clone())
+                .unwrap(),
+            user: result.iter().rev()
+                .find(|message| message.role == ChatRole::User)
+                .map(|message| message.content.clone())
+                .unwrap_or_default(),
+        }
     };
 
     for statement in prompt.statements.iter() {
         match statement {
             Statement::MatchStatement(match_statement) => {
-                return evaluate_match_statement(&env, match_statement).await
+                let _ = evaluate_match_statement(evaluator, &state, match_statement).await;
+            },
+            Statement::PipeStatement(pipe_statement) => {
+                let _ = evaluate_pipe_statement(evaluator, &state, pipe_statement).await;
             },
             _ => todo!()
         }
     }
-    Ok(String::new())
+    Ok(result)
 }
 
+async fn evaluate_pipe_statement(
+    evaluator: &Evaluate,
+    state: &EvaluateState,
+    statement: &PipeStatement) -> Result<(), EvaluateError>
+{
+    let append = match &*statement.variable.0 {
+        "AI" => &state.vars.ai,
+        "USER" => &state.vars.user,
+        _ => return Err(EvaluateError::UndeclaredVariable(statement.variable.0.clone()))
+    };
+
+    evaluate_prompt_call(evaluator, &statement.prompt_call, append);
+    Ok(())
+}
+
+fn evaluate_prompt_call(
+    evaluator: &Evaluate,
+    call: &PromptCall,
+    append: &str) -> Result<JoinHandle<Result<Vec<ChatMessage>, EvaluateError>>, EvaluateError>
+{
+    let evaluate = evaluator.clone();
+    let prompt = evaluate.program.prompts.iter()
+        .find(|p| p.name == call.name)
+        .ok_or(EvaluateError::MissingPrompt(call.name.clone().into()))?
+        .clone();
+
+    let append_str = Some(String::from(append));
+
+    Ok(tokio::spawn(async move {
+        let options = prompt.options.clone();
+        let command = ChatCommand {
+            completion: CompletionOptions {
+                ai_responds_first: Some(false),
+                append: append_str,
+                no_context: options.history.map(|h| !h),
+                name: Some(prompt.name.clone()),
+                once: Some(true),
+                stream: Some(false),
+                quiet: Some(true),
+                ..CompletionOptions::default()
+            },
+            system: options.system,
+            direction: options.direction
+        };
+
+        evaluate_prompt(&evaluate, &prompt, &command).await
+    }))
+}
+
+
 async fn evaluate_match_statement(
-    env: &EvaluateEnvironment,
-    statement: &MatchStatement) -> EvaluatorResult
+    evaluator: &Evaluate,
+    state: &EvaluateState,
+    statement: &MatchStatement) -> Result<(), EvaluateError>
 {
     let MatchStatement { variable, cases } = statement;
     let test = match &*variable.0 {
-        "AI" => env.ai.clone(),
-        "USER" => env.user.clone(),
+        "AI" => state.vars.ai.clone(),
+        "USER" => state.vars.user.clone(),
         _ => panic!("Unexpected variable")
     };
 
@@ -108,60 +181,80 @@ async fn evaluate_match_statement(
         if let Some(captures) = case.regex.captures(&test) {
             let names = &mut case.regex.capture_names();
 
-            return evaluate_match_action(&env, &case.action, &captures, names).await;
+            return evaluate_match_action(evaluator, state, &case.action, &captures, names).await;
         }
     }
 
-    Ok(String::new())
+    Ok(())
 }
 
 async fn evaluate_match_action(
-    env: &EvaluateEnvironment,
+    evaluator: &Evaluate,
+    state: &EvaluateState,
     action: &MatchAction,
     captures: &Captures<'_>,
-    capture_names: &mut CaptureNames<'_>) -> EvaluatorResult
+    capture_names: &mut CaptureNames<'_>) -> Result<(), EvaluateError>
 {
     match action {
         MatchAction::Command(ref command) => {
-            evaluate_match_action_command(env, command, captures, capture_names)
+            evaluate_match_action_command(evaluator, state, command, captures, capture_names)?;
         },
-        _ => todo!()
+        MatchAction::PromptCall(ref call) => {
+            evaluate_prompt_call(evaluator, &call, &captures[1]);
+        }
     }
+
+    Ok(())
 }
 
 fn evaluate_match_action_command(
-    env: &EvaluateEnvironment,
+    env: &Evaluate,
+    state: &EvaluateState,
     command: &Command,
     captures: &Captures<'_>,
-    capture_names: &mut CaptureNames<'_>) -> EvaluatorResult
+    capture_names: &mut CaptureNames<'_>) -> Result<String, EvaluateError>
 {
-    let output = if cfg!(target_os = "windows") {
-        process::Command::new("cmd")
-                .env("AI", &env.ai)
-                .env("USER", &env.user)
-                .args(["/C", &command.0])
-                .output()
-                .expect("failed to execute process")
+    let mut process = process::Command::new(if cfg!(target_os = "windows") {
+        "cmd"
     } else {
-        let mut process = process::Command::new("sh");
-        process.env("AI", &env.ai);
-        process.env("USER", &env.user);
+        "sh"
+    });
 
-        let mut i = 0;
-        for name in capture_names {
-            if let Some(name) = name {
-                process.env(name, &captures[name]);
-            }
-            process.env(&format!("{i}"), &captures[i]);
-            i += 1;
+    process.env("AI", &state.vars.ai);
+    process.env("USER", &state.vars.user);
+    process.current_dir(env.config.prompt_dir.clone());
+
+    let mut i = 0;
+    for name in capture_names {
+        if let Some(name) = name {
+            process.env(name, &captures[name]);
         }
+        let g = format!("M{i}");
+        process.env(&g, &captures[i]);
+        i += 1;
+    }
 
+    if cfg!(target_os = "windows") {
+        process.args(["/C", &command.0]);
+    } else {
         process.arg("-c");
         process.arg(&command.0);
-        process.output().expect("failed to execute process")
-    };
-    // TODO: Handle errors on stderr... somehow
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+
+    let output = process.output().expect("failed to execute process");
+
+    let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    if err.len() > 0 {
+        Err(EvaluateError::Command(err))
+    } else {
+        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    }
+}
+
+impl EvaluateState {
+    fn update(&self, vars: EvaluateVars) -> Self {
+        Self { vars }
+    }
 }
 
 #[cfg(test)]
@@ -170,10 +263,13 @@ mod tests {
     use regex::Regex;
 
     #[tokio::test]
-    async fn evaluate_match_statement_() {
-        let env = &EvaluateEnvironment {
-            user: "".into(),
-            ai: "Yes. Something else".into()
+    async fn evaluate_match_statement_with_named_group() {
+        let env = &mock_evaluator();
+        let state = &EvaluateState {
+            vars: EvaluateVars {
+                user: "".into(),
+                ai: "Yes. Something else".into()
+            }
         };
         let statement = &MatchStatement {
             variable: Variable("AI".into()),
@@ -184,6 +280,46 @@ mod tests {
                 }
             ]
         };
-        assert_eq!(evaluate_match_statement(env, statement).await.unwrap(), String::from("Something else"));
+
+        assert_eq!(String::from("Something else"), evaluate_match_statement(env, state, statement)
+            .await
+            .unwrap());
+    }
+
+    #[tokio::test]
+    async fn evaluate_match_statement_with_position_group() {
+        let env = &mock_evaluator();
+        let state = &EvaluateState {
+            vars: EvaluateVars {
+                user: "".into(),
+                ai: "Yes. Something else".into()
+            }
+        };
+        let statement = &MatchStatement {
+            variable: Variable("AI".into()),
+            cases: vec![
+                MatchCase {
+                    regex: Regex::new("((?i)yes[^a-z]*(.+))").unwrap(),
+                    action: MatchAction::Command(Command("echo $M2".into()))
+                }
+            ]
+        };
+        assert_eq!(String::from("Something else"), evaluate_match_statement(env, state, statement)
+            .await
+            .unwrap());
+    }
+
+    fn mock_evaluator() -> Evaluate {
+        Evaluate {
+            client: reqwest::ClientBuilder::new().build().expect("Client"),
+            config: EvaluateConfig {
+                api_key: String::new(),
+                prompt_path: PathBuf::new(),
+                prompt_dir: std::env::current_dir().unwrap()
+            },
+            program: Program {
+                prompts: vec![]
+            }
+        }
     }
 }

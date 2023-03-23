@@ -1,8 +1,8 @@
 api_request
-    no_context: true
+    history: false
     system: "Write a CURL command for the api request described. Respond with just the command without and extra explaination"
 {
     match $AI {
-        (^curl) => `$AI`
+        (curl.*['|"][^'|"]*) => `eval "$M1 -s"`
     }
 }

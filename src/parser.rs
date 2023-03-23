@@ -60,7 +60,7 @@ peg::parser! {
         pub rule prompt_call() -> PromptCall
             = name:prompt_name() awaited:".await"? { 
                 PromptCall {
-                    call: name,
+                    name,
                     awaited: awaited.is_some()
                 }
             }
@@ -78,7 +78,7 @@ peg::parser! {
                     _ => serde_yaml::from_str(&yaml)?
                 };
 
-                Ok(Prompt { name, options, statements })
+                Ok(Prompt { name, options, statements, is_main: false })
             }
 
         pub rule statement() -> Statement
@@ -91,7 +91,13 @@ peg::parser! {
 
         pub rule program() -> Result<Program, serde_yaml::Error>
             = _ prompts:prompt()* _ {
-                let prompts = prompts.into_iter().collect::<Result<Vec<_>, serde_yaml::Error>>()?;
+                let mut prompts = prompts
+                    .into_iter()
+                    .collect::<Result<Vec<_>, serde_yaml::Error>>()?;
+
+                if let Some(mut prompt) = prompts.first_mut() {
+                    prompt.is_main = true;
+                }
 
                 Ok(Program { prompts })
             }

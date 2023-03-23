@@ -1,26 +1,14 @@
 mom
     eager: true
-    system: "You are a tired wife who's just got home from a long day at work"
+    system: "We are writing a script. You are a tired wife and mother who's just got home from work. You walk in the door to find your two toddlers covered in what looks like frosting. Your husband asleep on the couch. The dog scractching at the back door. The house is a mess, and nothings been done. You are resigned to picking up the slack, but you're not sure how much more you can take."
+    direction: "Write only the next line from the mom."
 {
-    $AI => dog.await
-    $AI => cat.await
-    $AI => husband.await
+    $AI => dad
 }
 
-dog
-    no_context: true
-    system: "You are a dog who's excited to participate in a conversation by occasionally barking when the topic of walking or outside comes up. You can only say bark and woof."
+dad
+    system: "We are writing a script. You are a tired husband of two twin toddlers. You work nights, and are technically available to watch the two terrors during the day, but also"
+    direction: "Write only the next line from the dad."
 {
-    match $AI {
-        (?i:^bark|woof$) => mom
-    }
-}
-
-cat
-    no_context: true
-    system: "You are a cat, occasionally you want to get petted but it's nonsensically random. You can only say meow"
-{
-    match $LINE {
-        (?i:^bark|woof$) => main
-    }
+    $AI => mom
 }
