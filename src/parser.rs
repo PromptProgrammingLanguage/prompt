@@ -58,11 +58,11 @@ peg::parser! {
             }
 
         pub rule prompt_name() -> String
-            = name:variable_char()+ { name.into_iter().collect::<String>() }
+            = _ name:variable_char()+ _ { name.into_iter().collect::<String>() }
 
         pub rule prompt_call() -> PromptCall
-            = name:prompt_name() { 
-                PromptCall { name }
+            = names:prompt_name() ++ "," {
+                PromptCall { names }
             }
 
         pub rule prompt() -> Result<Prompt, serde_yaml::Error>
@@ -157,7 +157,7 @@ mod tests {
                 MatchCase {
                     regex: Regex::new("(?i:^yes)").unwrap(),
                     action: MatchAction::PromptCall(PromptCall {
-                        name: String::from("go_ahead"),
+                        names: vec![ String::from("go_ahead") ]
                     })
                 },
                 MatchCase {
@@ -193,11 +193,17 @@ mod tests {
 
     #[test]
     fn parse_prompt_call() {
-        let prompt_call = "bar";
         assert_eq!(
-            parse::prompt_call(prompt_call).unwrap(),
+            parse::prompt_call("bar").unwrap(),
             PromptCall {
-                name: String::from("bar"),
+                names: vec![ String::from("bar") ]
+            }
+        );
+
+        assert_eq!(
+            parse::prompt_call("bar, boo").unwrap(),
+            PromptCall {
+                names: vec![ String::from("bar"), String::from("boo") ]
             }
         );
 
@@ -239,13 +245,16 @@ mod tests {
 
     #[test]
     fn parse_pipe_statement_with_variable_subject() {
-        let pipe_statement = "$LINE -> foo";
+        let pipe_statement = "$LINE -> foo, bar";
         assert_eq!(
             parse::pipe_statement(pipe_statement).unwrap(),
             PipeStatement {
                 subject: PipeSubject::Variable(Variable(String::from("LINE"))),
                 call: PromptCall {
-                    name: String::from("foo"),
+                    names: vec![
+                        String::from("foo"),
+                        String::from("bar"),
+                    ]
                 }
             }
         );
@@ -259,7 +268,7 @@ mod tests {
             PipeStatement {
                 subject: PipeSubject::Command(Command(String::from("echo $AI"))),
                 call: PromptCall {
-                    name: String::from("foo"),
+                    names: vec![ String::from("foo") ]
                 }
             }
         );
@@ -283,7 +292,7 @@ mod tests {
                     MatchCase {
                         regex: Regex::new("(?i:yes)").unwrap(),
                         action: MatchAction::PromptCall(PromptCall {
-                            name: String::from("go_ahead"),
+                            names: vec![ String::from("go_ahead") ]
                         })
                     },
                     MatchCase {
@@ -293,11 +302,11 @@ mod tests {
                 ]
             }),
             Statement::PromptCall(PromptCall {
-                name: String::from("foo"),
+                names: vec![ String::from("foo") ],
             }),
             Statement::PipeStatement(PipeStatement {
                 call: PromptCall {
-                    name: String::from("baz"),
+                    names: vec![ String::from("baz") ]
                 },
                 subject: PipeSubject::Variable(Variable(String::from("bar")))
             }),

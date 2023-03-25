@@ -68,7 +68,7 @@ pub enum PipeSubject {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PromptCall {
-    pub name: String,
+    pub names: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

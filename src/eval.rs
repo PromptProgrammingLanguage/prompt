@@ -188,38 +188,41 @@ fn evaluate_prompt_call(
     evaluator: &Evaluate,
     state: &EvaluateState,
     call: &PromptCall,
-    append: &str) -> Result<JoinHandle<Result<Vec<ChatMessage>, EvaluateError>>, EvaluateError>
+    append: &str) -> Result<(), EvaluateError>
 {
-    let evaluate = evaluator.clone();
-    let prompt = evaluate.program.prompts.iter()
-        .find(|p| p.name == call.name)
-        .ok_or(EvaluateError::MissingPrompt(call.name.clone().into()))?
-        .clone();
+    for name in call.names.iter() {
+        let evaluate = evaluator.clone();
+        let prompt = evaluate.program.prompts.iter()
+            .find(|p| &p.name == name)
+            .ok_or(EvaluateError::MissingPrompt(name.clone().into()))?
+            .clone();
+        let append_str = Some(String::from(append));
+        let prefix_user = Some(state.current_prompt_name.clone());
 
-    let append_str = Some(String::from(append));
-    let prefix_user = Some(state.current_prompt_name.clone());
+        tokio::spawn(async move {
+            let options = prompt.options.clone();
+            let command = ChatCommand {
+                completion: CompletionOptions {
+                    ai_responds_first: Some(false),
+                    append: append_str,
+                    no_context: options.history.map(|h| !h),
+                    name: Some(prompt.name.clone()),
+                    once: Some(true),
+                    prefix_ai: Some(prompt.name.clone()),
+                    prefix_user,
+                    stream: Some(false),
+                    quiet: Some(true),
+                    ..CompletionOptions::default()
+                },
+                system: options.description,
+                direction: options.direction
+            };
 
-    Ok(tokio::spawn(async move {
-        let options = prompt.options.clone();
-        let command = ChatCommand {
-            completion: CompletionOptions {
-                ai_responds_first: Some(false),
-                append: append_str,
-                no_context: options.history.map(|h| !h),
-                name: Some(prompt.name.clone()),
-                once: Some(true),
-                prefix_ai: Some(prompt.name.clone()),
-                prefix_user,
-                stream: Some(false),
-                quiet: Some(true),
-                ..CompletionOptions::default()
-            },
-            system: options.description,
-            direction: options.direction
-        };
+            evaluate_prompt(&evaluate, &prompt, &command).await
+        });
+    }
 
-        evaluate_prompt(&evaluate, &prompt, &command).await
-    }))
+    Ok(())
 }
 
 fn evaluate_command(

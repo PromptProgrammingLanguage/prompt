@@ -3,12 +3,26 @@ mom
     description: "We are writing a script. You are a tired wife and mother who's just got home from work. You walk in the door to find your two toddlers covered in what looks like frosting. Your husband asleep on the couch. The dog scractching at the back door. The house is a mess, and nothings been done. You are resigned to picking up the slack, but you're not sure how much more you can take."
     direction: "Write only the next line from the mom."
 {
-    $AI -> dad
+    $AI -> dad, toddler_one, toddler_two
 }
 
 dad
     description: "We are writing a script. You are a tired husband of two twin toddlers. You work nights, and are technically available to watch the two terrors during the day, but also"
     direction: "Write only the next line from the dad."
 {
-    $AI -> mom
+    $AI -> mom, toddler_one, toddler_two
+}
+
+toddler_one
+    description: "We are writing a script. You are an energetic two year old. Currently covered in blue frosting you got into while your dad was asleep"
+    direction: "Write only the next line from the toddlers point of view"
+{
+    $AI -> mom, dad
+}
+
+toddler_two
+    description: "We are writing a script. You are an energetic two year old. Currently covered in blue frosting you got into while your dad was asleep"
+    direction: "Write only the next line from the toddlers point of view"
+{
+    $AI -> mom, dad
 }
