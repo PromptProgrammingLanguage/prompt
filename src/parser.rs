@@ -39,7 +39,10 @@ peg::parser! {
             = _ cases:match_case() ** "," _  { cases }
 
         rule match_case() -> MatchCase
-            = _ regex:regex() _ "=>" _ command:command() _ {
+            = _ regex:regex() _ "=>" _ pipe:pipe_statement() _ {
+                MatchCase { regex, action: MatchAction::Pipe(pipe) }
+            }
+            / _ regex:regex() _ "=>" _ command:command() _ {
                 MatchCase { regex, action: MatchAction::Command(command) }
             }
             / _ regex:regex() _ "=>" _ prompt_call:prompt_call() _ {
@@ -47,11 +50,11 @@ peg::parser! {
             }
 
         pub rule pipe_statement() -> PipeStatement
-            = variable:variable() _ "=>" _ prompt_call:prompt_call() {
-                PipeStatement {
-                    variable,
-                    prompt_call
-                }
+            = subject:command() _ "->" _ call:prompt_call() {
+                PipeStatement { call, subject: PipeSubject::Command(subject) }
+            }
+            / subject:variable() _ "->" _ call:prompt_call() {
+                PipeStatement { call, subject: PipeSubject::Variable(subject) }
             }
 
         pub rule prompt_name() -> String
@@ -118,11 +121,13 @@ mod tests {
         assert_eq!(parse::program(program).unwrap().unwrap(), Program {
             prompts: vec![
                 Prompt {
+                    is_main: true,
                     name: "bob".into(),
                     options: PromptOptions::default(),
                     statements: vec![]
                 },
                 Prompt {
+                    is_main: false,
                     name: "alice".into(),
                     options: PromptOptions::default(),
                     statements: vec![]
@@ -155,7 +160,7 @@ mod tests {
                 MatchCase {
                     regex: Regex::new("(?i:^yes)").unwrap(),
                     action: MatchAction::PromptCall(PromptCall {
-                        call: String::from("go_ahead"),
+                        name: String::from("go_ahead"),
                         awaited: false
                     })
                 },
@@ -196,7 +201,7 @@ mod tests {
         assert_eq!(
             parse::prompt_call(prompt_call).unwrap(),
             PromptCall {
-                call: String::from("foo"),
+                name: String::from("foo"),
                 awaited: true
             }
         );
@@ -205,7 +210,7 @@ mod tests {
         assert_eq!(
             parse::prompt_call(prompt_call).unwrap(),
             PromptCall {
-                call: String::from("bar"),
+                name: String::from("bar"),
                 awaited: false
             }
         );
@@ -226,8 +231,10 @@ mod tests {
         "#;
 
         assert_eq!(parse::prompt(prompt).unwrap().unwrap(), Prompt {
+            is_main: false,
             name: "table".into(),
             options: PromptOptions {
+                direction: None,
                 eager: None,
                 history: Some(false),
                 system: Some(
@@ -245,14 +252,29 @@ mod tests {
     }
 
     #[test]
-    fn parse_pipe_statement() {
-        let pipe_statement = "$LINE => foo";
+    fn parse_pipe_statement_with_variable_subject() {
+        let pipe_statement = "$LINE -> foo";
         assert_eq!(
             parse::pipe_statement(pipe_statement).unwrap(),
             PipeStatement {
-                variable: Variable(String::from("LINE")),
-                prompt_call: PromptCall {
-                    call: String::from("foo"),
+                subject: PipeSubject::Variable(Variable(String::from("LINE"))),
+                call: PromptCall {
+                    name: String::from("foo"),
+                    awaited: false
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn parse_pipe_statement_with_command() {
+        let pipe_statement = "`echo $AI` -> foo";
+        assert_eq!(
+            parse::pipe_statement(pipe_statement).unwrap(),
+            PipeStatement {
+                subject: PipeSubject::Command(Command(String::from("echo $AI"))),
+                call: PromptCall {
+                    name: String::from("foo"),
                     awaited: false
                 }
             }
@@ -267,7 +289,7 @@ mod tests {
                 (?i:no) => `handle_error`
             }
             foo.await
-            $bar => baz
+            $bar -> baz
         "#;
 
         assert_eq!(parse::statements(input).unwrap(), vec![
@@ -277,7 +299,7 @@ mod tests {
                     MatchCase {
                         regex: Regex::new("(?i:yes)").unwrap(),
                         action: MatchAction::PromptCall(PromptCall {
-                            call: String::from("go_ahead"),
+                            name: String::from("go_ahead"),
                             awaited: false
                         })
                     },
@@ -288,15 +310,15 @@ mod tests {
                 ]
             }),
             Statement::PromptCall(PromptCall {
-                call: String::from("foo"),
+                name: String::from("foo"),
                 awaited: true
             }),
             Statement::PipeStatement(PipeStatement {
-                variable: Variable(String::from("bar")),
-                prompt_call: PromptCall {
-                    call: String::from("baz"),
+                call: PromptCall {
+                    name: String::from("baz"),
                     awaited: false
-                }
+                },
+                subject: PipeSubject::Variable(Variable(String::from("bar")))
             }),
         ]);
     }

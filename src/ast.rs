@@ -16,10 +16,10 @@ pub struct Prompt {
 
 #[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 pub struct PromptOptions {
+    pub description: Option<String>,
     pub direction: Option<String>,
     pub eager: Option<bool>,
     pub history: Option<bool>,
-    pub system: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -49,14 +49,21 @@ impl PartialEq for MatchCase {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum MatchAction {
+    Pipe(PipeStatement),
     Command(Command),
     PromptCall(PromptCall)
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PipeStatement {
-    pub variable: Variable,
-    pub prompt_call: PromptCall,
+    pub call: PromptCall,
+    pub subject: PipeSubject,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PipeSubject {
+    Command(Command),
+    Variable(Variable)
 }
 
 #[derive(Clone, Debug, PartialEq)]

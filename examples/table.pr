@@ -1,6 +1,6 @@
 table
     history: false
-    system: "Answer this question with a yes or no answer. Is this input valid JSON that can be used with NodeJS's console.table method cleanly?"
+    description: "Answer this question with a yes or no answer. Is this input valid JSON that can be used with NodeJS's console.table method cleanly?"
 {
     match $AI {
         (?i:^yes) => `node --eval "console.table(JSON.parse('$USER'))"`

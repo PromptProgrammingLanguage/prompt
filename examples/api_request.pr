@@ -1,6 +1,6 @@
 api_request
     history: false
-    system: "Write a CURL command for the api request described. Respond with just the command without and extra explaination"
+    description: "Write a CURL command for the api request described. Respond with just the command without and extra explaination"
 {
     match $AI {
         (curl.*['|"][^'|"]*) => `eval "$M1 -s"`

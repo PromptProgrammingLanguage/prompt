@@ -1,14 +1,12 @@
-use std::sync::mpsc::channel;
-use std::time::Duration;
-use std::fs::{OpenOptions,File};
+use std::fs::{OpenOptions};
 use std::io::{self,BufRead,BufReader,Write};
 use std::path::PathBuf;
 use tokio::sync::mpsc;
-use notify::{Watcher, RecommendedWatcher, RecursiveMode, event::{Event,EventKind}};
+use notify::{Watcher, RecursiveMode, event::{Event,EventKind}};
 
 pub async fn monitor(path: PathBuf) -> notify::Result<()> {
     let (tx, mut rx) = mpsc::channel(256);
-    let mut content = std::fs::read_to_string(&path).unwrap_or_default();
+    let content = std::fs::read_to_string(&path).unwrap_or_default();
     let transcript = {
         match content.find("<->") {
             Some(divider_index) => content
