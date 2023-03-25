@@ -69,7 +69,6 @@ pub enum PipeSubject {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PromptCall {
     pub name: String,
-    pub awaited: bool
 }
 
 #[derive(Clone, Debug, PartialEq)]

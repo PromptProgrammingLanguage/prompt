@@ -61,11 +61,8 @@ peg::parser! {
             = name:variable_char()+ { name.into_iter().collect::<String>() }
 
         pub rule prompt_call() -> PromptCall
-            = name:prompt_name() awaited:".await"? { 
-                PromptCall {
-                    name,
-                    awaited: awaited.is_some()
-                }
+            = name:prompt_name() { 
+                PromptCall { name }
             }
 
         pub rule prompt() -> Result<Prompt, serde_yaml::Error>
@@ -161,7 +158,6 @@ mod tests {
                     regex: Regex::new("(?i:^yes)").unwrap(),
                     action: MatchAction::PromptCall(PromptCall {
                         name: String::from("go_ahead"),
-                        awaited: false
                     })
                 },
                 MatchCase {
@@ -197,21 +193,11 @@ mod tests {
 
     #[test]
     fn parse_prompt_call() {
-        let prompt_call = "foo.await";
-        assert_eq!(
-            parse::prompt_call(prompt_call).unwrap(),
-            PromptCall {
-                name: String::from("foo"),
-                awaited: true
-            }
-        );
-
         let prompt_call = "bar";
         assert_eq!(
             parse::prompt_call(prompt_call).unwrap(),
             PromptCall {
                 name: String::from("bar"),
-                awaited: false
             }
         );
 
@@ -224,7 +210,7 @@ mod tests {
         let prompt = r#"
             table
                 history: false
-                system: "Answer this question with a yes or no answer. Is this input valid JSON that can be used with NodeJS's console.table method cleanly?"
+                description: "Answer this question with a yes or no answer. Is this input valid JSON that can be used with NodeJS's console.table method cleanly?"
             {
                 match $AI {}
             }
@@ -237,7 +223,7 @@ mod tests {
                 direction: None,
                 eager: None,
                 history: Some(false),
-                system: Some(
+                description: Some(
                     "Answer this question with a yes or no answer. Is this input valid JSON \
                     that can be used with NodeJS's console.table method cleanly?".into()
                 )
@@ -260,7 +246,6 @@ mod tests {
                 subject: PipeSubject::Variable(Variable(String::from("LINE"))),
                 call: PromptCall {
                     name: String::from("foo"),
-                    awaited: false
                 }
             }
         );
@@ -275,7 +260,6 @@ mod tests {
                 subject: PipeSubject::Command(Command(String::from("echo $AI"))),
                 call: PromptCall {
                     name: String::from("foo"),
-                    awaited: false
                 }
             }
         );
@@ -288,7 +272,7 @@ mod tests {
                 (?i:yes) => go_ahead,
                 (?i:no) => `handle_error`
             }
-            foo.await
+            foo
             $bar -> baz
         "#;
 
@@ -300,7 +284,6 @@ mod tests {
                         regex: Regex::new("(?i:yes)").unwrap(),
                         action: MatchAction::PromptCall(PromptCall {
                             name: String::from("go_ahead"),
-                            awaited: false
                         })
                     },
                     MatchCase {
@@ -311,12 +294,10 @@ mod tests {
             }),
             Statement::PromptCall(PromptCall {
                 name: String::from("foo"),
-                awaited: true
             }),
             Statement::PipeStatement(PipeStatement {
                 call: PromptCall {
                     name: String::from("baz"),
-                    awaited: false
                 },
                 subject: PipeSubject::Variable(Variable(String::from("bar")))
             }),

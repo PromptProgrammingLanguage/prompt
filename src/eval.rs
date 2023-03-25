@@ -281,6 +281,7 @@ mod tests {
     async fn evaluate_match_statement_with_named_group() {
         let env = &mock_evaluator();
         let state = &EvaluateState {
+            current_prompt_name: String::new(),
             vars: EvaluateVars {
                 user: "".into(),
                 ai: "Yes. Something else".into()
@@ -308,6 +309,7 @@ mod tests {
     async fn evaluate_match_statement_with_position_group() {
         let env = &mock_evaluator();
         let state = &EvaluateState {
+            current_prompt_name: String::new(),
             vars: EvaluateVars {
                 user: "".into(),
                 ai: "Yes. Something else".into()
