@@ -84,7 +84,11 @@ peg::parser! {
                             }
                         }
                         let strip = indent.unwrap_or(0);
-                        format!("{}\n", line[strip..].to_string())
+                        if line.len() > strip {
+                            format!("{}\n", line[strip..].to_string())
+                        } else {
+                            format!("{}\n", line)
+                        }
                     })
                     .collect::<String>();
                     

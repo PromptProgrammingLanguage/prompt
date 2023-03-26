@@ -17,7 +17,8 @@ pub struct Evaluate {
 pub struct EvaluateConfig {
     pub api_key: String,
     pub prompt_path: PathBuf,
-    pub prompt_dir: PathBuf
+    pub prompt_dir: PathBuf,
+    pub quiet: bool
 }
 
 #[derive(Debug, Clone, Default)]
@@ -97,11 +98,17 @@ async fn evaluate_prompt(
         vars: EvaluateVars {
             ai: result.iter().rev()
                 .find(|message| message.role == ChatRole::Ai)
-                .map(|message| message.content.clone())
+                .map(|message| message.content.split_once(':')
+                    .map(|(_, content)| content.trim_start().to_string())
+                    .unwrap_or_else(|| message.content.to_string())
+                )
                 .unwrap(),
             user: result.iter().rev()
                 .find(|message| message.role == ChatRole::User)
-                .map(|message| message.content.clone())
+                .map(|message| message.content.split_once(':')
+                    .map(|(_, content)| content.trim_start().to_string())
+                    .unwrap_or_else(|| message.content.to_string())
+                )
                 .unwrap_or_default(),
         }
     };
@@ -155,7 +162,12 @@ async fn evaluate_match_action(
             evaluate_pipe_statement(evaluator, state, pipe, Some(captures), Some(capture_names))?;
         },
         MatchAction::Command(ref command) => {
-            evaluate_command(evaluator, state, command, Some(captures), Some(capture_names))?;
+            let result = evaluate_command(
+                evaluator, state, command, Some(captures), Some(capture_names))?;
+
+            if !evaluator.config.quiet {
+                println!("{result}");
+            }
         },
         MatchAction::PromptCall(ref call) => {
             evaluate_prompt_call(evaluator, &state, &call, &captures[1])?;
@@ -344,7 +356,8 @@ mod tests {
             config: EvaluateConfig {
                 api_key: String::new(),
                 prompt_path: PathBuf::new(),
-                prompt_dir: std::env::current_dir().unwrap()
+                prompt_dir: std::env::current_dir().unwrap(),
+                quiet: false
             },
             program: Program {
                 prompts: vec![]
