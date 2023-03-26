@@ -67,10 +67,25 @@ peg::parser! {
 
         pub rule prompt() -> Result<Prompt, serde_yaml::Error>
             = _ name:prompt_name() _ yaml:$([^'{']*) _ "{" _ statements:statements() _ "}" _ {
+                let mut indent = None;
                 let yaml = yaml
                     .to_string()
                     .lines()
-                    .map(|l| format!("{}\n", l.trim_start()))
+                    .map(|line| {
+                        if indent.is_none() {
+                            indent = line.chars().enumerate().find_map(|(i, c)| if c != ' ' {
+                                Some(i)
+                            } else {
+                                None
+                            });
+
+                            if indent == Some(0) {
+                                indent = None;
+                            }
+                        }
+                        let strip = indent.unwrap_or(0);
+                        format!("{}\n", line[strip..].to_string())
+                    })
                     .collect::<String>();
                     
                 let options = match yaml.len() {
