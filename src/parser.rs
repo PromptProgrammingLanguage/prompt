@@ -3,8 +3,6 @@ use regex::Regex;
 
 peg::parser! {
     pub grammar parse() for str {
-        rule _() = quiet!{[' ' | '\t' | '\r' | '\n']*}
-
         rule variable_char() -> String
             = s:$(['a'..='z' | 'A'..='Z' | '0'..='9' | '_']+) { s.to_string() }
 
@@ -120,6 +118,20 @@ peg::parser! {
 
                 Ok(Program { prompts })
             }
+
+        rule _() = quiet!{__() comment()? __()}
+        rule __() = quiet!{[' ' | '\t' | '\r' | '\n']*}
+        rule ___() = quiet!{"\r\n" / "\n" / "\r"}
+
+        rule comment()
+            = comment_single_line()
+            / comment_multi_line()
+
+        rule comment_single_line()
+            = "//" $(!___()[_])+ ___()?
+
+        rule comment_multi_line()
+            = "/*" $(!"*/"[_])+ "*/"
     }
 }
 
@@ -130,8 +142,16 @@ mod tests {
     #[test]
     fn parse_program() {
         let program = r#"
-            bob {}
-            alice {}
+            /* An ignored
+             * multiline
+             * comment
+             */
+            bob // { Testing comments
+            {
+                /* bob was a nice guy */
+            }
+            alice {
+            }
         "#;
 
         assert_eq!(parse::program(program).unwrap().unwrap(), Program {
