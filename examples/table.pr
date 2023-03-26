@@ -1,6 +1,11 @@
+/*
+    When prompting an LLM to generate tables of data, they can sometimes
+    generate inconsistent results. We can use Prompt to work around this by
+    asking if the input is valid JSON, and then using a shell command to
+    invoke NodeJS's table method if the answer is yes.
+*/
 table
-    history: false
-    description: >
+    direction: >
         Answer this question with a yes or no answer. Is this input valid JSON
         that can be used with Nodes console.table method cleanly?
 {

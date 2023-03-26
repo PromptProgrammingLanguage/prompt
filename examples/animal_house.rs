@@ -4,10 +4,11 @@ use std::path::PathBuf;
 #[tokio::main]
 async fn main() {
     let path = PathBuf::from("./examples/animal_house.pr");
-    println!("{:?}", path);
 
     let args = PromptArgs {
-        path
+        path,
+        quiet: false,
+        watch: None
     };
 
     prompt(args).await;

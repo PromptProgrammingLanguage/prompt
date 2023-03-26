@@ -1,5 +1,10 @@
+/*
+    This Prompt showcases getting multiple prompts to "talk" to each other in
+    a repl loop. The output of this prompt is pure chaos.
+*/
 mom
     eager: true
+    direction: Write only the next line from the mom.
     description: >
         We are writing a script. You are a tired wife and mother who's just got
         home from work. You walk in the door to find your two toddlers covered
@@ -7,17 +12,16 @@ mom
         scratching at the back door. The house is a mess, and nothings been
         done. You are resigned to picking up the slack, but you're not sure how
         much more you can take.
-    direction: Write only the next line from the mom.
 {
     $AI -> dad, toddler_one, toddler_two
 }
 
 dad
+    direction: Write only the next line from the dad
     description: >
         We are writing a script. You are a tired husband of two twin toddlers.
         You work nights, and are technically available to watch the two terrors
         during the day, but also
-    direction: Write only the next line from the dad
 {
     $AI -> mom, toddler_one, toddler_two
 }
