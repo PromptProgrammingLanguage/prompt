@@ -37,7 +37,7 @@ pub enum EvaluateError {
     Command(String),
     MissingPrompt(String),
     UndeclaredVariable(String),
-
+    CommandExited
 }
 
 impl Evaluate {
@@ -69,7 +69,6 @@ impl Evaluate {
             direction: main.options.direction.clone()
         }).await?;
 
-
         Ok(())
     }
 }
@@ -88,6 +87,11 @@ async fn evaluate_prompt(
     };
 
     let result = command.run(client, &config).await.unwrap();
+
+    if result.len() == 0 {
+        return Err(EvaluateError::CommandExited);
+    }
+
     let state = EvaluateState {
         current_prompt_name: prompt.name.clone(),
         vars: EvaluateVars {

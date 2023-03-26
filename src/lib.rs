@@ -5,7 +5,7 @@ pub mod watch;
 
 use clap::Parser;
 use reqwest::{ClientBuilder,header::HeaderMap,header::HeaderValue};
-use eval::{Evaluate,EvaluateConfig};
+use eval::{Evaluate,EvaluateError,EvaluateConfig};
 use std::fs;
 use std::env;
 use std::path::PathBuf;
@@ -66,7 +66,10 @@ pub async fn prompt(args: PromptArgs) {
     tokio::spawn(async move {
         let eval = Evaluate::new(client, program, config);
         if let Err(e) = eval.eval().await {
-            eprintln!("{:#?}", e);
+            match e {
+                EvaluateError::CommandExited => std::process::exit(0),
+                _ => eprintln!("{:#?}", e)
+            }
         }
     });
 
