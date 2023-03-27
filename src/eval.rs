@@ -121,7 +121,13 @@ async fn evaluate_prompt(
             Statement::PipeStatement(pipe_statement) => {
                 let _ = evaluate_pipe_statement(evaluator, &state, pipe_statement, None, None);
             },
-            _ => todo!()
+            Statement::Command(command) => {
+                let result = evaluate_command(evaluator, &state, &command, None, None)?;
+
+                if !evaluator.config.quiet {
+                    println!("{result}");
+                }
+            }
         }
     }
     Ok(result)

@@ -25,8 +25,8 @@ pub struct PromptOptions {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Statement {
     MatchStatement(MatchStatement),
-    PromptCall(PromptCall),
     PipeStatement(PipeStatement),
+    Command(Command)
 }
 
 #[derive(Clone, Debug, PartialEq)]

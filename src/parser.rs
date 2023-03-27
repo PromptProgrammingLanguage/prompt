@@ -100,8 +100,8 @@ peg::parser! {
 
         pub rule statement() -> Statement
             = s:match_statement() _ { Statement::MatchStatement(s) }
-            / s:prompt_call() _ { Statement::PromptCall(s) }
             / s:pipe_statement() _ { Statement::PipeStatement(s) }
+            / s:command() _ { Statement::Command(s) }
 
         pub rule statements() -> Vec<Statement>
             = _ statements:(statement()) ** _ { statements }
@@ -278,6 +278,29 @@ mod tests {
                     variable: Variable(String::from("AI")),
                     cases: vec![]
                 })
+            ]
+        });
+    }
+
+    #[test]
+    fn parse_prompt_with_base_command() {
+        let input = r#"
+            summerize
+                direction: "Can you summerize the contents of this HTML page?"
+            {
+                `echo $AI`
+            }
+        "#;
+
+        assert_eq!(parse::prompt(&input).unwrap().unwrap(), Prompt {
+            is_main: false,
+            name: "summerize".into(),
+            options: PromptOptions {
+                direction: Some("Can you summerize the contents of this HTML page?".into()),
+                ..PromptOptions::default()
+            },
+            statements: vec![
+                Statement::Command(Command("echo $AI".into()))
             ]
         });
     }
