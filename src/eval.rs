@@ -1,10 +1,13 @@
-use ai::{Config,ChatCommand,ChatMessage,ChatRole,CompletionOptions};
+use ai::{Config,ChatCommand,ChatRole,CompletionOptions};
 use reqwest::Client;
 use std::path::PathBuf;
 use std::process;
-use tokio::task::JoinHandle;
+use tokio::task::JoinError;
 use regex::{Captures,CaptureNames};
 use super::ast::*;
+use futures::future::join_all;
+use futures::Future;
+use std::pin::Pin;
 
 #[derive(Clone, Debug)]
 pub struct Evaluate {
@@ -38,7 +41,12 @@ pub enum EvaluateError {
     Command(String),
     MissingPrompt(String),
     UndeclaredVariable(String),
+    JoinError(JoinError),
     CommandExited
+}
+
+impl From<JoinError> for EvaluateError {
+    fn from(e: JoinError) -> Self { EvaluateError::JoinError(e) }
 }
 
 impl Evaluate {
@@ -54,8 +62,7 @@ impl Evaluate {
         };
 
         let main = evaluate.program.prompts.iter().find(|prompt| prompt.is_main).unwrap();
-
-        evaluate_prompt(evaluate, main, &ChatCommand {
+        let command = &ChatCommand {
             completion: CompletionOptions {
                 ai_responds_first: main.options.eager.clone(),
                 no_context: main.options.history.clone().map(|h| !h),
@@ -68,16 +75,16 @@ impl Evaluate {
             },
             system: main.options.description.clone(),
             direction: main.options.direction.clone()
-        }).await?;
+        };
 
-        Ok(())
+        evaluate_prompt(evaluate, main, command).await
     }
 }
 
 async fn evaluate_prompt(
     evaluator: &Evaluate,
     prompt: &Prompt,
-    command: &ChatCommand) -> Result<Vec<ChatMessage>, EvaluateError>
+    command: &ChatCommand) -> Result<(), EvaluateError>
 {
     let Evaluate { client, config, .. } = evaluator;
 
@@ -130,7 +137,8 @@ async fn evaluate_prompt(
             }
         }
     }
-    Ok(result)
+
+    Ok(())
 }
 
 async fn evaluate_match_statement(
@@ -165,7 +173,8 @@ async fn evaluate_match_action(
 {
     match action {
         MatchAction::Pipe(ref pipe) => {
-            evaluate_pipe_statement(evaluator, state, pipe, Some(captures), Some(capture_names))?;
+            evaluate_pipe_statement(evaluator, state, pipe, Some(captures), Some(capture_names))
+                .await?;
         },
         MatchAction::Command(ref command) => {
             let result = evaluate_command(
@@ -176,14 +185,19 @@ async fn evaluate_match_action(
             }
         },
         MatchAction::PromptCall(ref call) => {
-            evaluate_prompt_call(evaluator, &state, &call, &captures[1])?;
+            evaluate_prompt_call(evaluator, &state, &call, &captures[1])
+                .await
+                .into_iter()
+                .collect::<Result<Vec<Result<(), EvaluateError>>, JoinError>>()?
+                .into_iter()
+                .collect::<Result<Vec<()>, EvaluateError>>()?;
         }
     }
 
     Ok(())
 }
 
-fn evaluate_pipe_statement(
+async fn evaluate_pipe_statement(
     evaluator: &Evaluate,
     state: &EvaluateState,
     statement: &PipeStatement,
@@ -201,7 +215,12 @@ fn evaluate_pipe_statement(
         }
     };
 
-    evaluate_prompt_call(evaluator, &state, &statement.call, &append)?;
+    evaluate_prompt_call(evaluator, &state, &statement.call, &append)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<Result<(), EvaluateError>>, JoinError>>()?
+        .into_iter()
+        .collect::<Result<Vec<()>, EvaluateError>>()?;
 
     Ok(())
 }
@@ -210,18 +229,21 @@ fn evaluate_prompt_call(
     evaluator: &Evaluate,
     state: &EvaluateState,
     call: &PromptCall,
-    append: &str) -> Result<(), EvaluateError>
+    append: &str) -> Pin<Box<dyn Future<Output = Vec<Result<Result<(), EvaluateError>, JoinError>>> + Send + 'static>>
 {
+    let mut handles = vec![];
+
     for name in call.names.iter() {
         let evaluate = evaluator.clone();
         let prompt = evaluate.program.prompts.iter()
             .find(|p| &p.name == name)
-            .ok_or(EvaluateError::MissingPrompt(name.clone().into()))?
+            .ok_or(EvaluateError::MissingPrompt(name.clone().into()))
+            .unwrap()
             .clone();
         let append_str = Some(String::from(append));
         let prefix_user = Some(state.current_prompt_name.clone());
 
-        tokio::spawn(async move {
+        handles.push(tokio::spawn(async move {
             let options = prompt.options.clone();
             let command = ChatCommand {
                 completion: CompletionOptions {
@@ -241,10 +263,10 @@ fn evaluate_prompt_call(
             };
 
             evaluate_prompt(&evaluate, &prompt, &command).await
-        });
+        }));
     }
 
-    Ok(())
+    Box::pin(join_all(handles))
 }
 
 fn evaluate_command(

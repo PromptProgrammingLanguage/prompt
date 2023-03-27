@@ -88,7 +88,9 @@ pub async fn prompt(args: PromptArgs) {
             watch::monitor(watched).await.unwrap();
         },
         None => {
-            eval.await;
+            if let Err(e) = eval.await {
+                eprintln!("{:#?}", e)
+            }
         }
     }
 
