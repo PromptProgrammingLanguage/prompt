@@ -95,6 +95,7 @@ pub enum SessionError {
     OpenAIError(OpenAIError),
     IOError(std::io::Error),
     DeserializeError(reqwest::Error),
+    Unauthorized
 }
 
 impl SessionCommand {

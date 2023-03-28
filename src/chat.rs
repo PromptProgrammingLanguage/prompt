@@ -43,7 +43,7 @@ impl ChatCommand {
         }
 
         let mut command = OpenAIChatCommand::try_from(options)?;
-        command.run(client).await
+        command.run(client, config).await
     }
 }
 
@@ -105,7 +105,8 @@ pub enum ChatError {
     OpenAIError(OpenAIError),
     NetworkError(reqwest::Error),
     IOError(std::io::Error),
-    EventSource(reqwest_eventsource::Error)
+    EventSource(reqwest_eventsource::Error),
+    Unauthorized
 }
 
 #[derive(Debug)]
@@ -167,7 +168,7 @@ impl TryFrom<&ChatOptions> for ChatMessages {
 
         for line in file.transcript.lines() {
             match line.split_once(':') {
-                Some((role, mut dialog)) => match ChatRole::try_from((role, options)) {
+                Some((role, dialog)) => match ChatRole::try_from((role, options)) {
                     Ok(normalized_role) => {
                         if let Some(message) = message {
                             messages.push(message);

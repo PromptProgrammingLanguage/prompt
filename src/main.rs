@@ -1,26 +1,19 @@
-extern crate derive_more;
-
-mod completion;
-mod image;
-mod session;
-mod openai;
-mod cohere;
-mod config;
-mod chat;
-
-pub use config::Config;
-
 use std::fs;
-use std::env;
 use std::concat;
 use clap::{Parser,Subcommand};
 use reqwest::ClientBuilder;
 use reqwest::header::{HeaderValue,HeaderMap};
 use dirs;
-use image::{ImageCommand,PictureFormat};
-use session::SessionCommand;
-use chat::ChatCommand;
-use config::{JSONConfig,DEFAULT_CONFIG_FILE};
+use ai::{
+    DEFAULT_CONFIG_FILE,
+    ChatCommand,
+    Config,
+    ImageCommand,
+    JSONConfig,
+    PictureFormat,
+    SessionCommand,
+    Voice
+};
 
 #[tokio::main]
 async fn main() {
@@ -51,20 +44,15 @@ async fn main() {
         .expect("Config file could not be read");
 
     let config = Config {
-        api_key: config_json.api_key,
         api_key_cohere: config_json.api_key_cohere,
         api_key_openai: config_json.api_key_openai,
+        api_key_eleven_labs: config_json.api_key_eleven_labs,
         dir: config_dir
     };
 
     let mut headers = HeaderMap::new();
     headers.insert("Accept", HeaderValue::from_static("application/json"));
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
-
-    if let Some(key) = env::var("AI_API_KEY").ok().or_else(|| config.api_key.clone()) {
-        let bearer = "Bearer ".to_owned() + &key;
-        headers.insert("Authorization", HeaderValue::from_str(&bearer).unwrap());
-    }
 
     let client = ClientBuilder::new()
         .default_headers(headers)
@@ -99,6 +87,12 @@ async fn main() {
                 },
                 _ => {}
             }
+        },
+        Commands::Voice(voice) => {
+            let result = voice.run(&client, &config).await;
+            if let Err(e) = result {
+                eprintln!("{:#?}", e);
+            }
         }
     }
 }
@@ -121,5 +115,8 @@ enum Commands {
 
     /// Generates an image
     Image(ImageCommand),
+
+    /// Translates text to a character voice
+    Voice(Voice),
 }
 

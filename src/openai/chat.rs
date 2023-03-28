@@ -1,12 +1,14 @@
-use crate::chat::{ChatOptions,ChatResult,ChatMessage,ChatMessages,ChatMessagesInternalExt,ChatRole,ChatError,ChatTranscriptionError};
+use crate::chat::{ChatOptions,ChatResult,ChatMessage,ChatMessages,ChatRole,ChatError};
 use std::io::{self,Write};
+use std::env;
 use async_recursion::async_recursion;
 use serde::{Serialize,Deserialize};
-use reqwest::Client;
+use reqwest::{Client,RequestBuilder};
 use reqwest_eventsource::{EventSource,Event};
 use serde_json::json;
 use futures_util::stream::StreamExt;
 use crate::openai::response::OpenAICompletionResponse;
+use crate::Config;
 
 pub struct OpenAIChatCommand {
     options: ChatOptions
@@ -22,18 +24,18 @@ impl TryFrom<ChatOptions> for OpenAIChatCommand {
 
 impl OpenAIChatCommand {
     #[async_recursion]
-    pub async fn run(&mut self, client: &Client) -> ChatResult {
+    pub async fn run(&mut self, client: &Client, config: &Config) -> ChatResult {
         let options = &mut self.options;
         let print_output = !options.completion.quiet.unwrap_or(false);
 
         loop {
             if options.stream {
-                let result = handle_stream(client, options).await?;
+                let result = handle_stream(client, options, config).await?;
                 if result.len() > 0 {
                     return Ok(result);
                 }
             } else {
-                let result = handle_sync(client, options, print_output).await?;
+                let result = handle_sync(client, options, config, print_output).await?;
                 if result.len() > 0 {
                     return Ok(result);
                 }
@@ -46,16 +48,8 @@ impl OpenAIChatCommand {
     }
 }
 
-async fn handle_sync(client: &Client, options: &mut ChatOptions, print_output: bool) -> ChatResult {
-    let post = client.post("https://api.openai.com/v1/chat/completions");
-
-    let messages = ChatMessages::try_from(&*options)?;
-    let request = post
-        .json(&json!({
-            "model": "gpt-3.5-turbo",
-            "temperature": options.temperature,
-            "messages": messages,
-        }))
+async fn handle_sync(client: &Client, options: &mut ChatOptions, config: &Config, print_output: bool) -> ChatResult {
+    let request = get_request(&client, &options, &config, false)?
         .send()
         .await
         .expect("Failed to send chat");
@@ -92,16 +86,8 @@ async fn handle_sync(client: &Client, options: &mut ChatOptions, print_output: b
     Ok(vec![])
 }
 
-async fn handle_stream(client: &Client, options: &mut ChatOptions) -> ChatResult {
-    let messages = ChatMessages::try_from(&*options)?;
-    let post = client.post("https://api.openai.com/v1/chat/completions")
-        .json(&json!({
-            "model": "gpt-3.5-turbo",
-            "temperature": options.temperature,
-            "stream": true,
-            "messages": messages
-        }));
-
+async fn handle_stream(client: &Client, options: &mut ChatOptions, config: &Config) -> ChatResult {
+    let post = get_request(client, options, config, true)?;
     let mut stream = EventSource::new(post).unwrap();
     let mut state = StreamMessageState::New;
 
@@ -136,6 +122,24 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions) -> ChatResult
     }
 
     Ok(vec![])
+}
+
+fn get_request(client: &Client, options: &ChatOptions, config: &Config, stream: bool) -> Result<RequestBuilder, ChatError> {
+    let messages = ChatMessages::try_from(options)?;
+
+    Ok(client.post("https://api.openai.com/v1/chat/completions")
+        .bearer_auth(env::var("OPEN_AI_API_KEY")
+            .ok()
+            .or_else(|| config.api_key_openai.clone())
+            .ok_or_else(|| ChatError::Unauthorized)?
+        )
+        .json(&json!({
+            "model": "gpt-3.5-turbo",
+            "temperature": options.temperature,
+            "messages": messages,
+            "stream": stream
+        }))
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

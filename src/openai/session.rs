@@ -4,6 +4,7 @@ use crate::session::{SessionResult,SessionOptions,SessionError,ModelFocus,Model}
 use crate::{Config};
 use reqwest::Client;
 use super::response::OpenAICompletionResponse;
+use std::env;
 
 #[derive(Debug, Default)]
 pub struct OpenAISessionCommand {
@@ -31,13 +32,12 @@ impl OpenAISessionCommand {
         config: &Config,
         prompt: &str) -> SessionResult
     {
-        let mut post = client.post("https://api.openai.com/v1/completions");
-
-        if let Some(key) = &config.api_key_openai {
-            post = post.bearer_auth(key);
-        }
-
-        let request = post
+        let request = client.post("https://api.openai.com/v1/completions")
+            .bearer_auth(env::var("OPEN_AI_API_KEY")
+                .ok()
+                .or_else(|| config.api_key_openai.clone())
+                .ok_or_else(|| SessionError::Unauthorized)?
+            )
             .json(&json!({
                 "model": self.model.to_versioned(),
                 "prompt": &prompt,

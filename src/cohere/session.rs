@@ -5,6 +5,7 @@ use crate::{Config};
 use reqwest::Client;
 use reqwest::header::HeaderValue;
 use uuid::Uuid;
+use std::env;
 
 #[derive(Debug, Default)]
 pub struct CohereSessionCommand {
@@ -36,12 +37,12 @@ impl CohereSessionCommand {
         config: &Config,
         prompt: &str) -> SessionResult
     {
-        let mut post = client.post("https://api.cohere.ai/generate");
-        if let Some(key) = &config.api_key_cohere {
-            post = post.bearer_auth(key);
-        }
-
-        let request = post
+        let request = client.post("https://api.cohere.ai/generate")
+            .bearer_auth(env::var("COHERE_API_KEY")
+                .ok()
+                .or_else(|| config.api_key_cohere.clone())
+                .ok_or_else(|| SessionError::Unauthorized)?
+            )
             .header("Cohere-Version", HeaderValue::from_static("2022-12-06"))
             .json(&json!({
                 "model": self.model.to_versioned(),
