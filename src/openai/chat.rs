@@ -70,7 +70,7 @@ async fn handle_sync(client: &Client, options: &mut ChatOptions, print_output: b
         .map(|message| {
             let message = message.content.trim();
 
-            if message.starts_with(&options.prefix_ai) {
+            if message.to_lowercase().starts_with(&options.prefix_ai) {
                 message.to_string()
             } else {
                 format!("{}: {}", options.prefix_ai, message)
@@ -212,74 +212,6 @@ pub struct OpenAIChatDelta {
 pub struct ChatMessageDelta {
     pub role: Option<ChatRole>,
     pub content: Option<String>,
-}
-
-impl TryFrom<&ChatOptions> for ChatMessages {
-    type Error = ChatError;
-
-    fn try_from(options: &ChatOptions) -> Result<Self, Self::Error> {
-        let ChatOptions { file, system, .. } = options;
-
-        let mut messages = vec![];
-        let mut message: Option<ChatMessage> = None;
-
-        messages.push(ChatMessage::new(ChatRole::System, system));
-
-        let handle_continuing_line = |line, message: &mut Option<ChatMessage>| match message {
-            Some(m) => {
-                *message = Some(ChatMessage::new(m.role, {
-                    let mut content = m.content.clone();
-                    content += "\n";
-                    content += line;
-                    content
-                }));
-                Ok(())
-            },
-            None => {
-                return Err(ChatError::ChatTranscriptionError(ChatTranscriptionError(
-                    "Missing opening chat role".into()
-                )));
-            }
-        };
-
-        for line in file.transcript.lines() {
-            match line.split_once(':') {
-                Some((role, dialog)) => match ChatRole::try_from(role) {
-                    Ok(role) => {
-                        if let Some(message) = message {
-                            messages.push(message);
-                        }
-
-                        message = Some(ChatMessage::new(role, dialog.trim_start()));
-                    },
-                    Err(_) => handle_continuing_line(line, &mut message)?
-                },
-                None => handle_continuing_line(line, &mut message)?
-            }
-        }
-
-        if let Some(message) = message {
-            messages.push(message);
-        }
-
-        return Ok(messages.labotomize(&options)?);
-    }
-}
-
-impl TryFrom<&str> for ChatRole {
-    type Error = ChatError;
-
-    fn try_from(role: &str) -> Result<Self, Self::Error> {
-        match &*role.to_lowercase().trim() {
-            "ai" |
-            "assistant" => Ok(ChatRole::Ai),
-            "user" => Ok(ChatRole::User),
-            "system" => Ok(ChatRole::System),
-            _ => Err(ChatError::ChatTranscriptionError(ChatTranscriptionError(
-                format!("Failed to transcibe {} into a ChatRole", role)
-            )))
-        }
-    }
 }
 
 #[cfg(test)]

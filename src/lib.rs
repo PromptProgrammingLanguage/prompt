@@ -23,5 +23,6 @@ pub use chat::{
     ChatCommand,
     ChatResult,
     ChatError,
-    ChatMessage
+    ChatMessage,
+    ChatRole
 };

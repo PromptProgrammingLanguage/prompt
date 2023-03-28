@@ -127,9 +127,8 @@ impl CompletionOptions {
 
             let mut transcript = String::new();
             let file = match fs::read_to_string(&path) {
-                Ok(mut session_config) => {
-                    let divider_index = session_config.find("<->")
-                        .expect("Valid session files have a <-> divider");
+                Ok(mut session_config) if session_config.find("<->").is_some() => {
+                    let divider_index = session_config.find("<->").unwrap();
 
                     transcript = session_config
                         .split_off(divider_index + 4)
@@ -145,7 +144,7 @@ impl CompletionOptions {
                         .open(path)
                         .expect("Unable to open session file")
                 },
-                Err(_) => {
+                _ => {
                     let config = serde_yaml::to_string(&overrides)
                         .expect("Serializing self to yaml config should work 100% of the time");
 
@@ -268,8 +267,10 @@ where
             .map(|s| s.trim().to_string());
 
         line.and_then(|line| match &prefix_user {
-            None => self.write(line).ok(),
-            Some(prefix) => self.write(format!("{}: {}", prefix, line)).ok(),
+            Some(prefix) if !line.to_lowercase().starts_with(prefix) => {
+                self.write(format!("{}: {}", prefix, line)).ok()
+            },
+            _ => self.write(line).ok(),
         })
     }
 }

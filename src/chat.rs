@@ -18,7 +18,10 @@ pub struct ChatCommand {
     pub completion: CompletionOptions,
 
     #[arg(long, short)]
-    pub system: Option<String>
+    pub system: Option<String>,
+
+    #[arg(long, short)]
+    pub direction: Option<String>,
 }
 
 impl ChatCommand {
@@ -44,10 +47,11 @@ impl ChatCommand {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(crate) struct ChatOptions {
     pub ai_responds_first: bool,
     pub completion: CompletionOptions,
+    pub direction: Option<ChatMessage>,
     pub system: String,
     pub file: CompletionFile<ChatCommand>,
     pub prefix_ai: String,
@@ -78,6 +82,8 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
 
         Ok(ChatOptions {
             ai_responds_first: completion.ai_responds_first.unwrap_or(false),
+            direction: command.direction.clone()
+                .map(|direction| ChatMessage::new(ChatRole::System, direction)),
             temperature: completion.temperature.unwrap_or(0.8),
             prefix_ai: completion.prefix_ai.clone().unwrap_or_else(|| String::from("AI")),
             prefix_user: completion.prefix_user.clone().unwrap_or_else(|| String::from("USER")),
@@ -130,6 +136,70 @@ impl ChatMessage {
 }
 
 pub type ChatMessages = Vec<ChatMessage>;
+
+impl TryFrom<&ChatOptions> for ChatMessages {
+    type Error = ChatError;
+
+    fn try_from(options: &ChatOptions) -> Result<Self, Self::Error> {
+        let ChatOptions { file, system, .. } = options;
+
+        let mut messages = vec![];
+        let mut message: Option<ChatMessage> = None;
+
+        messages.push(ChatMessage::new(ChatRole::System, system));
+
+        let handle_continuing_line = |line, message: &mut Option<ChatMessage>| match message {
+            Some(m) => {
+                *message = Some(ChatMessage::new(m.role, {
+                    let mut content = m.content.clone();
+                    content += "\n";
+                    content += line;
+                    content
+                }));
+                Ok(())
+            },
+            None => {
+                return Err(ChatError::ChatTranscriptionError(ChatTranscriptionError(
+                    "Missing opening chat role".into()
+                )));
+            }
+        };
+
+        for line in file.transcript.lines() {
+            match line.split_once(':') {
+                Some((role, mut dialog)) => match ChatRole::try_from((role, options)) {
+                    Ok(normalized_role) => {
+                        if let Some(message) = message {
+                            messages.push(message);
+                        }
+
+                        let mut dialog = dialog.trim_start().to_string();
+                        if role != "ai" && role != "assitant" && role != "user" && role != "system"
+                            && !dialog.to_lowercase().starts_with(role) {
+                            dialog = format!("{role}: {dialog}");
+                        }
+
+                        message = Some(ChatMessage::new(normalized_role, dialog));
+                    },
+                    Err(_) => handle_continuing_line(line, &mut message)?
+                },
+                None => handle_continuing_line(line, &mut message)?
+            }
+        }
+
+        if let Some(message) = message {
+            messages.push(message);
+        }
+
+        if let Some(direction) = &options.direction {
+            messages.push(direction.clone());
+        }
+
+        let lab = messages.labotomize(&options)?;
+        return Ok(lab);
+    }
+}
+
 pub(crate) trait ChatMessagesInternalExt {
     fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> where Self: Sized;
 }
@@ -186,5 +256,29 @@ impl std::fmt::Display for ChatRole {
             Self::User => "USER: ",
             Self::System => "SYSTEM: "
         })
+    }
+}
+
+impl TryFrom<(&str, &ChatOptions)> for ChatRole {
+    type Error = ChatError;
+
+    fn try_from((role, options): (&str, &ChatOptions)) -> Result<Self, Self::Error> {
+        let role = role.to_lowercase();
+        let role = role.trim();
+
+        if role == options.prefix_ai.to_lowercase() {
+            return Ok(ChatRole::Ai)
+        }
+
+        if role == options.prefix_user.to_lowercase() {
+            return Ok(ChatRole::User)
+        }
+
+        match &*role {
+            "ai" |
+            "assistant" => Ok(ChatRole::Ai),
+            "system" => Ok(ChatRole::System),
+            _ => Ok(ChatRole::User),
+        }
     }
 }
