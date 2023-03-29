@@ -29,7 +29,7 @@ pub use chat::{
     ChatRole
 };
 pub use voice::{
-    Voice,
+    VoiceCommand,
     VoiceResult,
     VoiceError
 };

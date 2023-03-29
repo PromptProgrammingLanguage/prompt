@@ -12,7 +12,7 @@ use ai::{
     JSONConfig,
     PictureFormat,
     SessionCommand,
-    Voice
+    VoiceCommand
 };
 
 #[tokio::main]
@@ -89,7 +89,7 @@ async fn main() {
             }
         },
         Commands::Voice(voice) => {
-            let result = voice.run(&client, &config).await;
+            let result = voice.command.run(&client, &config).await;
             if let Err(e) = result {
                 eprintln!("{:#?}", e);
             }
@@ -117,6 +117,5 @@ enum Commands {
     Image(ImageCommand),
 
     /// Translates text to a character voice
-    Voice(Voice),
+    Voice(VoiceCommand),
 }
-

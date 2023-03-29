@@ -134,7 +134,7 @@ fn get_request(client: &Client, options: &ChatOptions, config: &Config, stream: 
             .ok_or_else(|| ChatError::Unauthorized)?
         )
         .json(&json!({
-            "model": "gpt-3.5-turbo",
+            "model": "gpt-4",
             "temperature": options.temperature,
             "messages": messages,
             "stream": stream
