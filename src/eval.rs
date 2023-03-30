@@ -89,7 +89,6 @@ async fn evaluate_prompt(
     let Evaluate { client, config, .. } = evaluator;
 
     let config = Config {
-        api_key: Some(config.api_key.clone()),
         dir: config.prompt_dir.clone(),
         ..Config::default()
     };

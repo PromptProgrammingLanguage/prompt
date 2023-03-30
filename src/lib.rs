@@ -27,8 +27,8 @@ pub struct PromptArgs {
 }
 
 pub async fn prompt(args: PromptArgs) {
-    let api_key = env::var("AI_API_KEY")
-        .expect("AI_API_KEY environment variable is missing");
+    let api_key = env::var("OPEN_AI_API_KEY")
+        .expect("OPEN_AI_API_KEY environment variable is missing");
 
     let client = {
         let mut headers = HeaderMap::new();
