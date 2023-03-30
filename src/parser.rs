@@ -124,14 +124,7 @@ peg::parser! {
         rule ___() = quiet!{"\r\n" / "\n" / "\r"}
 
         rule comment()
-            = comment_single_line()
-            / comment_multi_line()
-
-        rule comment_single_line()
-            = "//" $(!___()[_])+ ___()?
-
-        rule comment_multi_line()
-            = "/*" $(!"*/"[_])+ "*/"
+            = "#" $(!___()[_])+ ___()?
     }
 }
 
@@ -142,13 +135,10 @@ mod tests {
     #[test]
     fn parse_program() {
         let program = r#"
-            /* An ignored
-             * multiline
-             * comment
-             */
-            bob // { Testing comments
+            # Comments
+            bob # { Testing comments
             {
-                /* bob was a nice guy */
+                # bob was a nice guy
             }
             alice {
             }
