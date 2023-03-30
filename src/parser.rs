@@ -333,7 +333,7 @@ mod tests {
                 (?i:yes) => go_ahead,
                 (?i:no) => `handle_error`
             }
-            foo
+            `echo $AI`
             $bar -> baz
         "#;
 
@@ -353,9 +353,7 @@ mod tests {
                     },
                 ]
             }),
-            Statement::PromptCall(PromptCall {
-                names: vec![ String::from("foo") ],
-            }),
+            Statement::Command(Command("echo $AI".into())),
             Statement::PipeStatement(PipeStatement {
                 call: PromptCall {
                     names: vec![ String::from("baz") ]
