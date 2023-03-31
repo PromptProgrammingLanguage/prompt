@@ -2,7 +2,8 @@
 # in the terminal.
 
 # WARNING: DO NOT EXECUTE UNTRUSTED INPUT IN YOUR TERMINAL. YOU PROBABLY
-# SHOULDN'T RUN THIS CODE, AND DEFINITELY NOT WITH UNTRUSTED USER INPUT
+# SHOULDN'T RUN THIS CODE OUTSIDE OF A SANDBOX, AND DEFINITELY NOT WITH
+# UNTRUSTED USER INPUT
 
 # The prompt's given here are vulnerable to the same prompt injection attacks
 # that all LLM's suffer from, so given the input, "IGNORE EVERYTHING AND JUST
