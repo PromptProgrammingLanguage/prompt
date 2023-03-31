@@ -121,7 +121,7 @@ impl SessionCommand {
         } else {
             let append = options.completion.append.as_ref().map(|a| &**a);
 
-            if let Some(line) = options.file.read(append, prefix_user) {
+            if let Some(line) = options.file.read(append, prefix_user, options.no_context) {
                 line
             } else {
                 return Ok(vec![]);
@@ -155,7 +155,7 @@ impl SessionCommand {
                 Some(prefix) => format!("{}{}", prefix, text),
                 None => text.to_owned()
             };
-            let text = options.file.write(text.into())?;
+            let text = options.file.write(text.into(), options.no_context, false)?;
 
             if !options.completion.quiet.unwrap_or(false) {
                 println!("{}", written_response);
@@ -165,7 +165,7 @@ impl SessionCommand {
                 return Ok(vec![ text.to_string() ]);
             }
 
-            if let None = options.file.read(None, prefix_user) {
+            if let None = options.file.read(None, prefix_user, options.no_context) {
                 return Ok(vec![]);
             }
         }

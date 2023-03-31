@@ -165,7 +165,9 @@ impl CompletionOptions {
             CompletionFile {
                 file: Some(file),
                 overrides,
-                transcript
+                transcript,
+                last_read_input: String::new(),
+                last_written_input: String::new()
             }
         });
 
@@ -225,7 +227,9 @@ pub struct ClashingArgumentsError {
 pub struct CompletionFile<T: Clone + Default + DeserializeOwned + Serialize> {
     pub file: Option<File>,
     pub overrides: T,
-    pub transcript: String
+    pub transcript: String,
+    pub last_read_input: String,
+    pub last_written_input: String
 }
 
 impl<T> CompletionFile<T>
@@ -242,36 +246,59 @@ where
         }
     }
 
-    pub fn write(&mut self, line: String) -> io::Result<String> {
+    pub fn write(&mut self, line: String, no_context: bool, is_read: bool) -> io::Result<String> {
+        if !is_read {
+            self.last_written_input = line.clone();
+        }
+
+        if no_context {
+            return Ok(line)
+        }
+
         match &mut self.file {
-            Some(file) => match writeln!(file, "{}", line) {
+            Some(file) => match writeln!(file, "{}", self.last_written_input) {
                 Ok(()) => {
-                    self.transcript += &line;
+                    self.transcript += &self.last_written_input;
                     self.transcript += "\n";
                     Ok(line)
                 },
                 Err(e) => Err(e)
             },
             None => {
-                self.transcript += &line;
+                self.transcript += &self.last_written_input;
                 self.transcript += "\n";
                 Ok(line)
             }
         }
     }
 
-    pub fn read(&mut self, append: Option<&str>, prefix_user: Option<&str>) -> Option<String> {
+    pub fn read(
+        &mut self,
+        append: Option<&str>,
+        prefix_user: Option<&str>,
+        no_context: bool) -> Option<String>
+    {
         let line = append
             .map(|s| s.to_string())
             .or_else(|| read_next_user_line(prefix_user))
             .map(|s| s.trim().to_string());
 
-        line.and_then(|line| match &prefix_user {
-            Some(prefix) if !line.to_lowercase().starts_with(prefix) => {
-                self.write(format!("{}: {}", prefix, line)).ok()
-            },
-            _ => self.write(line).ok(),
-        })
+        line
+            .and_then(|line| {
+                let line = match &prefix_user {
+                    Some(prefix) if !line.to_lowercase().starts_with(prefix) => {
+                        format!("{}: {}", prefix, line)
+                    },
+                    _ => line
+                };
+                self.last_read_input = line.clone();
+                Some(line)
+            })
+            .and_then(|line| if no_context {
+                Some(line)
+            } else {
+                self.write(line, no_context, true).ok()
+            })
     }
 }
 

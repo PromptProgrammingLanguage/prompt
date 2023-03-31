@@ -36,8 +36,9 @@ impl ChatCommand {
 
         if !options.ai_responds_first {
             let append = options.completion.append.as_ref().map(|a| &**a);
+            let prefix_user = Some(&*options.prefix_user);
 
-            if let None = options.file.read(append, Some(&*options.prefix_user)) {
+            if let None = options.file.read(append, prefix_user, options.no_context) {
                 return Ok(vec![]);
             }
         }
@@ -54,6 +55,7 @@ pub(crate) struct ChatOptions {
     pub direction: Option<ChatMessage>,
     pub system: String,
     pub file: CompletionFile<ChatCommand>,
+    pub no_context: bool,
     pub prefix_ai: String,
     pub prefix_user: String,
     pub stream: bool,
@@ -85,6 +87,7 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
             direction: command.direction.clone()
                 .map(|direction| ChatMessage::new(ChatRole::System, direction)),
             temperature: completion.temperature.unwrap_or(0.8),
+            no_context: completion.no_context.unwrap_or(false),
             prefix_ai: completion.prefix_ai.clone().unwrap_or_else(|| String::from("AI")),
             prefix_user: completion.prefix_user.clone().unwrap_or_else(|| String::from("USER")),
             system,
@@ -192,8 +195,16 @@ impl TryFrom<&ChatOptions> for ChatMessages {
             messages.push(message);
         }
 
+        if options.no_context {
+            messages.push(ChatMessage::new(ChatRole::User, file.last_read_input.clone()));
+        }
+
         if let Some(direction) = &options.direction {
             messages.push(direction.clone());
+        }
+
+        if options.no_context {
+            messages.push(ChatMessage::new(ChatRole::Ai, file.last_written_input.clone()))
         }
 
         let lab = messages.labotomize(&options)?;

@@ -41,7 +41,7 @@ impl OpenAIChatCommand {
                 }
             }
 
-            if let None = options.file.read(None, Some(&*options.prefix_user)) {
+            if let None = options.file.read(None, Some(&*options.prefix_user), options.no_context) {
                 return Ok(vec![]);
             }
         }
@@ -72,7 +72,7 @@ async fn handle_sync(client: &Client, options: &mut ChatOptions, config: &Config
         });
 
     if let Some(text) = text {
-        let text = options.file.write(text)?;
+        let text = options.file.write(text, options.no_context, false)?;
 
         if print_output {
             println!("{}", text);
@@ -90,6 +90,7 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions, config: &Conf
     let post = get_request(client, options, config, true)?;
     let mut stream = EventSource::new(post).unwrap();
     let mut state = StreamMessageState::New;
+    let mut response = String::new();
 
     'stream: while let Some(event) = stream.next().await {
         match event {
@@ -98,7 +99,7 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions, config: &Conf
                 break 'stream;
             },
             Ok(Event::Message(message)) => {
-                state = handle_stream_message(options, message.data, state)?;
+                state = handle_stream_message(options, message.data, &mut response, state)?;
             },
             Err(err) => {
                 stream.close();
@@ -112,10 +113,12 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions, config: &Conf
         StreamMessageState::HasWrittenRole |
         StreamMessageState::HasWrittenContent => {
             println!("");
-            options.file.write_words(String::from("\n"))?;
+            response += "\n";
             io::stdout().flush().unwrap();
         },
     }
+
+    options.file.write(response, options.no_context, false);
 
     if options.completion.append.is_some() || options.completion.once.unwrap_or(false) {
         return Ok(ChatMessages::try_from(&*options)?);
@@ -152,6 +155,7 @@ enum StreamMessageState {
 fn handle_stream_message(
     options: &mut ChatOptions,
     message: String,
+    response: &mut String,
     mut state: StreamMessageState) -> Result<StreamMessageState, ChatError>
 {
     let chat_response: OpenAICompletionResponse<OpenAIChatDelta> =
@@ -159,8 +163,8 @@ fn handle_stream_message(
 
     let delta = &chat_response.choices.first().unwrap().delta;
     if let Some(ref role) = delta.role {
-        let role = options.file.write_words(format!("{}", role))?;
         print!("{}", role);
+        response.push_str(&format!("{role}"));
         state = StreamMessageState::HasWrittenRole;
     }
     if let Some(content) = delta.content.clone() {
@@ -184,7 +188,7 @@ fn handle_stream_message(
 
         print!("{}", filtered);
         state = StreamMessageState::HasWrittenContent;
-        options.file.write_words(format!("{}", filtered))?;
+        response.push_str(&filtered);
     }
     io::stdout().flush().unwrap();
     Ok(state)
