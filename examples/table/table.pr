@@ -4,6 +4,7 @@
 # invoke NodeJS's table method if the answer is yes.
 
 table
+    history: false
     direction: >
         Answer this question with a yes or no answer. Is this input valid JSON
         that can be used with Nodes console.table method cleanly?
