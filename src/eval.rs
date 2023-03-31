@@ -285,6 +285,13 @@ fn evaluate_command(
     process.env("USER", &state.vars.user);
     process.current_dir(env.config.prompt_dir.clone());
 
+    if cfg!(target_os = "windows") {
+        process.args(["/C", &command.0]);
+    } else {
+        process.arg("-c");
+        process.arg(&command.0);
+    }
+
     match (capture_names, captures) {
         (Some(capture_names), Some(captures)) => {
             let mut i = 0;
@@ -292,19 +299,11 @@ fn evaluate_command(
                 if let Some(name) = name {
                     process.env(name, &captures[name]);
                 }
-                let g = format!("M{i}");
-                process.env(&g, &captures[i]);
+                process.arg(captures[i].to_string());
                 i += 1;
             }
         },
         _ => {}
-    }
-
-    if cfg!(target_os = "windows") {
-        process.args(["/C", &command.0]);
-    } else {
-        process.arg("-c");
-        process.arg(&command.0);
     }
 
     let output = process.output().expect("failed to execute process");

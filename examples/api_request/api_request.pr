@@ -15,6 +15,6 @@ api_request
     direction: Respond with JUST THE COMMAND without anything else
 {
     match $AI {
-        (curl.*['|"][^'|"]*) => `eval "$M1 -s"`
+        (curl.*['|"][^'|"]*) => `eval "$1 -s"`
     }
 }
