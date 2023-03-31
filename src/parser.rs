@@ -56,7 +56,7 @@ peg::parser! {
             }
 
         pub rule prompt_name() -> String
-            = _ name:variable_char()+ _ { name.into_iter().collect::<String>() }
+            = _ name:variable_char()+ { name.into_iter().collect::<String>() }
 
         pub rule prompt_call() -> PromptCall
             = names:prompt_name() ++ "," {
@@ -64,7 +64,7 @@ peg::parser! {
             }
 
         pub rule prompt() -> Result<Prompt, serde_yaml::Error>
-            = _ name:prompt_name() _ yaml:$([^'{']*) _ "{" _ statements:statements() _ "}" _ {
+            = _ name:prompt_name() yaml:$([^'{']*) _ "{" _ statements:statements() _ "}" _ {
                 let mut indent = None;
                 let yaml = yaml
                     .to_string()
@@ -136,8 +136,7 @@ mod tests {
     fn parse_program() {
         let program = r#"
             # Comments
-            bob # { Testing comments
-            {
+            bob {
                 # bob was a nice guy
             }
             alice {
@@ -385,5 +384,55 @@ silly
         "#;
 
         parse::program(input).unwrap();
+    }
+
+    #[test]
+    fn parse_animal_house() {
+        parse::program(r#"
+# This Prompt showcases getting multiple prompts to "talk" to each other in
+# a repl loop. The output of this prompt is pure chaos.
+
+mom
+    eager: true
+    direction: Write only the next line from the mom.
+    description: >
+        We are writing a script. You are a tired wife and mother who's just got
+        home from work. You walk in the door to find your two toddlers covered
+        in what looks like frosting. Your husband asleep on the couch. The dog
+        scratching at the back door. The house is a mess, and nothings been
+        done. You are resigned to picking up the slack, but you're not sure how
+        much more you can take.
+{
+    $AI -> dad, toddler_one, toddler_two
+}
+
+dad
+    direction: Write only the next line from the dad
+    description: >
+        We are writing a script. You are a tired husband of two twin toddlers.
+        You work nights, and are technically available to watch the two terrors
+        during the day, but also
+{
+    $AI -> mom, toddler_one, toddler_two
+}
+
+toddler_one
+    description: >
+        We are writing a script. You are an energetic two year old. Currently
+        covered in blue frosting you got into while your dad was asleep
+    direction: Write only the next line from the toddlers point of view
+{
+    $AI -> mom, dad
+}
+
+toddler_two
+    description: >
+        We are writing a script. You are an energetic two year old. Currently
+        covered in blue frosting you got into while your dad was asleep
+    direction: Write only the next line from the toddlers point of view
+{
+    $AI -> mom, dad
+}
+        "#).expect("Animal house to parse correctly").expect("Animal house to parse correctly");
     }
 }
