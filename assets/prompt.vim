@@ -25,6 +25,7 @@ syntax match promptMatchVariable '$[A-Z]\+'
 syntax match promptRegex '([^)]*)'
 syntax match promptFatArrow '=>'
 syntax match promptSkinnyArrow '->'
+syntax match promptComment '#.*'
 
 hi def link promptName Type
 hi def link promptCall Type
@@ -33,3 +34,4 @@ hi def link promptMatchVariable PreProc
 hi def link promptFatArrow Statement
 hi def link promptSkinnyArrow Statement
 hi def link promptRegex Comment
+hi def link promptComment Comment
