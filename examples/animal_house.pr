@@ -1,7 +1,6 @@
-/*
-    This Prompt showcases getting multiple prompts to "talk" to each other in
-    a repl loop. The output of this prompt is pure chaos.
-*/
+# This Prompt showcases getting multiple prompts to "talk" to each other in
+# a repl loop. The output of this prompt is pure chaos.
+
 mom
     eager: true
     direction: Write only the next line from the mom.

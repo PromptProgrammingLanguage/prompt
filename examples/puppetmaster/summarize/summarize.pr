@@ -1,0 +1,16 @@
+url_validator
+    history: false
+    direction: "Did I input a website address? Answer with yes or no only."
+{
+    match $AI {
+        (?i:^yes) => `node scrape.js "$USER"` -> summarize,
+        (.*) => `echo "Please enter a valid URL"`
+    }
+}
+
+summarize
+    history: false
+    direction: "Can you give me a one-paragraph summary of this article?"
+{
+    `echo $AI`
+}

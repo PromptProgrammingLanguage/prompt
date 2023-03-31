@@ -1,0 +1,18 @@
+# This isn't done yet, the current crop of LLM website automators preparse the
+# DOM into a more basic structure for the LLM to handle. I had the nutty idea
+# that we should have the user describe what they want to automate, and then
+# have our AI write a Puppeteer script to accomplish that specific task. I've
+# not got it working yet, but I've not tried that hard yet. So for now, we
+# leave this as an excercise for you dear user.
+
+jester
+    direction: "Write a NodeJS Puppeteer script to automate a webpage using the given directions"
+{
+    $AI -> checker
+}
+
+checker
+    direction: "Double check this script for any errors that may prevent it from running and correct them."
+{
+    `cat $AI > automated.js`
+}
