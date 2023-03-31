@@ -125,7 +125,8 @@ async fn evaluate_prompt(
                 let _ = evaluate_match_statement(evaluator, &state, match_statement).await;
             },
             Statement::PipeStatement(pipe_statement) => {
-                let _ = evaluate_pipe_statement(evaluator, &state, pipe_statement, None, None);
+                let _ = evaluate_pipe_statement(evaluator, &state, pipe_statement, None, None)
+                    .await;
             },
             Statement::Command(command) => {
                 let result = evaluate_command(evaluator, &state, &command, None, None)?;
@@ -260,7 +261,6 @@ fn evaluate_prompt_call(
                 system: options.description,
                 direction: options.direction
             };
-
             evaluate_prompt(&evaluate, &prompt, &command).await
         }));
     }
