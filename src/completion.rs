@@ -236,16 +236,6 @@ impl<T> CompletionFile<T>
 where
     T: Clone + Default + DeserializeOwned + Serialize
 {
-    pub fn write_words(&mut self, words: String) -> io::Result<String> {
-        match &mut self.file {
-            Some(file) => match write!(file, "{}", words) {
-                Ok(()) => { self.transcript += &words; Ok(words) },
-                Err(e) => Err(e)
-            },
-            None => { self.transcript += &words; Ok(words) }
-        }
-    }
-
     pub fn write(&mut self, line: String, no_context: bool, is_read: bool) -> io::Result<String> {
         if !is_read {
             self.last_written_input = line.clone();
