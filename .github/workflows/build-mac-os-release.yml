@@ -1,0 +1,55 @@
+  name: macOS release
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: stable
+        override: true
+
+    - name: Build
+      uses: actions-rs/cargo@v1
+      with:
+        command: build
+        args: --verbose
+
+    - name: Run tests
+      uses: actions-rs/cargo@v1
+      with:
+        command: test
+        args: --verbose
+
+    - name: Install release components
+      run: rustup component add clippy rustfmt
+
+    - name: Build release
+      run: cargo build --release
+
+    - name: Compress binary
+      run: |
+        mkdir -p release
+        cp target/release/prompt release/
+        tar czf release/prompt-macos.tar.gz -C release prompt
+
+    - name: Install GitHub CLI
+      run: brew install gh
+
+    - name: Create release and upload binary
+      run: |
+        export GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+        tag_name=$(git describe --abbrev=0)
+        gh release create $tag_name release/prompt-macos.tar.gz -t "Release $tag_name" -n "Release $tag_name for macOS" --repo ${{ github.repository }}
