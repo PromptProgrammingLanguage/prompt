@@ -12,8 +12,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "ai"
+name = "ai-cli"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7f9b1de03243d4c2dc683aba00847ff150f184d6bec8c44b2b57ea2d3f390942"
 dependencies = [
  "async-recursion",
  "clap",
@@ -1047,7 +1049,7 @@ dependencies = [
 name = "prompt"
 version = "0.1.0"
 dependencies = [
- "ai",
+ "ai-cli",
  "clap",
  "futures",
  "notify",
