@@ -1,12 +1,12 @@
 [package]
 name = "prompt"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-ai-cli = "0.1.0"
+ai-cli = "0.2.0"
 peg = "0.8.1"
 regex = "1.7.1"
 serde = { version = "1.0.156", features = ["derive"] }

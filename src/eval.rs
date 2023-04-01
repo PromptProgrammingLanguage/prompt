@@ -74,7 +74,8 @@ impl Evaluate {
                 ..CompletionOptions::default()
             },
             system: main.options.description.clone(),
-            direction: main.options.direction.clone()
+            direction: main.options.direction.clone(),
+            provider: None
         };
 
         evaluate_prompt(evaluate, main, command).await
@@ -259,7 +260,8 @@ fn evaluate_prompt_call(
                     ..CompletionOptions::default()
                 },
                 system: options.description,
-                direction: options.direction
+                direction: options.direction,
+                provider: None
             };
             evaluate_prompt(&evaluate, &prompt, &command).await
         }));
