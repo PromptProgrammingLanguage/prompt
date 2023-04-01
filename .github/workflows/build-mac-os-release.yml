@@ -1,5 +1,8 @@
 name: macOS release
 
+env:
+  ACTIONS_STEP_DEBUG: true
+
 on: workflow_dispatch
 
 jobs:
@@ -46,6 +49,10 @@ jobs:
 
     - name: Create release and upload binary
       run: |
+        echo "::debug::Foo"
         export GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
+        echo "::debug::Bar"
         tag_name=$(git describe --abbrev=0)
+        echo "::debug::Baz"
         gh release create $tag_name release/prompt-macos.tar.gz -t "Release $tag_name" -n "Release $tag_name for macOS" --repo ${{ github.repository }}
+        echo "::debug::Boo"
