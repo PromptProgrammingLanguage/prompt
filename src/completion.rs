@@ -246,16 +246,16 @@ where
         }
 
         match &mut self.file {
-            Some(file) => match writeln!(file, "{}", self.last_written_input) {
+            Some(file) => match writeln!(file, "{}", line) {
                 Ok(()) => {
-                    self.transcript += &self.last_written_input;
+                    self.transcript += &line;
                     self.transcript += "\n";
                     Ok(line)
                 },
                 Err(e) => Err(e)
             },
             None => {
-                self.transcript += &self.last_written_input;
+                self.transcript += &line;
                 self.transcript += "\n";
                 Ok(line)
             }
