@@ -1,7 +1,10 @@
 [package]
-name = "ai"
+name = "ai-cli"
 version = "0.1.0"
 edition = "2021"
+description = "A CLI tool for all things AI (generating images or audio, chatting with LLM's, you name it)"
+license = "MIT"
+repository = "https://github.com/PromptProgrammingLanguage/ai"
 
 [lib]
 name = "ai"
