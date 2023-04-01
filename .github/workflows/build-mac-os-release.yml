@@ -41,11 +41,9 @@ jobs:
         cp target/release/prompt release/
         tar czf release/prompt-macos.tar.gz -C release prompt
 
-    - name: Install GitHub CLI
-      run: brew install gh
-
-    - name: Create release and upload binary
-      run: |
-        export GITHUB_TOKEN=${{ secrets.GITHUB_TOKEN }}
-        tag_name=$(git describe --abbrev=0)
-        gh release create $tag_name release/prompt-macos.tar.gz -t "Release $tag_name" -n "Release $tag_name for macOS" --repo ${{ github.repository }}
+    - name: 'Upload Artifact'
+      uses: actions/upload-artifact@v3
+      with:
+        name: prompt-macos
+        path: release/prompt-macos.tar.gz
+        retention-days: 5
