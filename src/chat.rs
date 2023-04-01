@@ -1,5 +1,5 @@
 use async_recursion::async_recursion;
-use clap::{Args};
+use clap::{Args,ValueEnum};
 use serde::{Serialize,Deserialize};
 use reqwest::Client;
 use derive_more::From;
@@ -8,8 +8,6 @@ use crate::openai::chat::OpenAIChatCommand;
 use crate::openai::OpenAIError;
 use crate::completion::{CompletionOptions,CompletionFile,ClashingArgumentsError};
 use crate::Config;
-
-const CHAT_TOKENS_MAX: usize = 4096;
 
 #[derive(Args, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatCommand {
@@ -22,6 +20,9 @@ pub struct ChatCommand {
 
     #[arg(long, short)]
     pub direction: Option<String>,
+
+    #[arg(long)]
+    pub provider: Option<ChatProvider>,
 }
 
 impl ChatCommand {
@@ -56,11 +57,12 @@ pub(crate) struct ChatOptions {
     pub system: String,
     pub file: CompletionFile<ChatCommand>,
     pub no_context: bool,
+    pub provider: ChatProvider,
     pub prefix_ai: String,
     pub prefix_user: String,
     pub stream: bool,
     pub temperature: f32,
-    pub tokens_max: usize,
+    pub tokens_max: Option<usize>,
     pub tokens_balance: f32
 }
 
@@ -82,17 +84,20 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
             .clone()
             .unwrap_or_else(|| String::from("A friendly and helpful AI assistant."));
 
+        let provider = command.provider.unwrap_or_default();
+
         Ok(ChatOptions {
             ai_responds_first: completion.ai_responds_first.unwrap_or(false),
             direction: command.direction.clone()
                 .map(|direction| ChatMessage::new(ChatRole::System, direction)),
             temperature: completion.temperature.unwrap_or(0.8),
             no_context: completion.no_context.unwrap_or(false),
+            provider,
             prefix_ai: completion.prefix_ai.clone().unwrap_or_else(|| String::from("AI")),
             prefix_user: completion.prefix_user.clone().unwrap_or_else(|| String::from("USER")),
             system,
             tokens_balance: completion.tokens_balance.unwrap_or(0.5),
-            tokens_max: CHAT_TOKENS_MAX,
+            tokens_max: completion.tokens_max,
             completion,
             stream,
             file,
@@ -185,7 +190,10 @@ impl TryFrom<&ChatOptions> for ChatMessages {
 
                         message = Some(ChatMessage::new(normalized_role, dialog));
                     },
-                    Err(_) => handle_continuing_line(line, &mut message)?
+                    Err(_) => {
+                        println!("lkjlkj");
+                        handle_continuing_line(line, &mut message)?
+                    }
                 },
                 None => handle_continuing_line(line, &mut message)?
             }
@@ -218,7 +226,9 @@ pub(crate) trait ChatMessagesInternalExt {
 
 impl ChatMessagesInternalExt for ChatMessages {
     fn labotomize(&self, options: &ChatOptions) -> Result<Self, ChatError> {
-        let tokens_max = options.tokens_max;
+        let tokens_max = options.tokens_max
+            .expect("The max tokens should have been assigned when creating the command");
+
         let tokens_balance = options.tokens_balance;
         let upper_bound = (tokens_max as f32 * tokens_balance).floor() as usize;
         let current_token_length: usize = self.iter().map(|m| m.tokens).sum();
@@ -248,6 +258,31 @@ impl ChatMessagesInternalExt for ChatMessages {
         } else {
             Ok(self.clone())
         }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default, ValueEnum, Serialize, Deserialize)]
+#[allow(non_camel_case_types)]
+pub enum ChatProvider {
+    #[default]
+    OpenAiGPT3Turbo,
+    OpenAiGPT3Turbo_0301,
+    OpenAiGPT4,
+    OpenAiGPT4_0314,
+    OpenAiGPT4_32K,
+    OpenAiGPT4_32K_0314
+}
+
+impl std::fmt::Display for ChatProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "{}", match self {
+            Self::OpenAiGPT3Turbo => "gpt-3.5-turbo",
+            Self::OpenAiGPT3Turbo_0301 => "gpt-3.5-turbo-0301",
+            Self::OpenAiGPT4 => "gpt-4",
+            Self::OpenAiGPT4_0314 => "gpt-4-0314",
+            Self::OpenAiGPT4_32K => "gpt-4-32k",
+            Self::OpenAiGPT4_32K_0314 => "gpt-4-32k-0314"
+        })
     }
 }
 

@@ -1,4 +1,7 @@
-use crate::chat::{ChatOptions,ChatResult,ChatMessage,ChatMessages,ChatRole,ChatError};
+use crate::chat::{ChatOptions,ChatResult,ChatMessage,ChatProvider,ChatMessages,ChatRole,ChatError};
+use crate::openai::response::OpenAICompletionResponse;
+use crate::completion::ClashingArgumentsError;
+use crate::Config;
 use std::io::{self,Write};
 use std::env;
 use async_recursion::async_recursion;
@@ -7,18 +10,48 @@ use reqwest::{Client,RequestBuilder};
 use reqwest_eventsource::{EventSource,Event};
 use serde_json::json;
 use futures_util::stream::StreamExt;
-use crate::openai::response::OpenAICompletionResponse;
-use crate::Config;
+use tiktoken_rs::get_chat_completion_max_tokens;
+use async_openai::types::{ChatCompletionRequestMessageArgs, Role};
+use std::cmp;
 
+const MAX_GPT3_TURBO_TOKENS: usize = 4096;
+const MAX_GPT4_BASE_TOKENS: usize = 8192;
+const MAX_GPT4_EXTENDED_TOKENS: usize = 32768;
+
+#[derive(Debug)]
 pub struct OpenAIChatCommand {
-    options: ChatOptions
+    options: ChatOptions,
 }
 
 impl TryFrom<ChatOptions> for OpenAIChatCommand {
     type Error = ChatError;
 
-    fn try_from(options: ChatOptions) -> Result<Self, Self::Error> {
-        Ok(OpenAIChatCommand { options })
+    fn try_from(mut options: ChatOptions) -> Result<Self, Self::Error> {
+        let provider = options.provider;
+        let tokens_max = get_max_tokens_for_model(provider);
+        let is_exceeding_max_tokens_allowed = match provider {
+            ChatProvider::OpenAiGPT3Turbo |
+            ChatProvider::OpenAiGPT3Turbo_0301 if tokens_max > MAX_GPT3_TURBO_TOKENS => true,
+
+            ChatProvider::OpenAiGPT4 |
+            ChatProvider::OpenAiGPT4_0314 if tokens_max > MAX_GPT4_BASE_TOKENS => true,
+
+            ChatProvider::OpenAiGPT4_32K |
+            ChatProvider::OpenAiGPT4_32K_0314 if tokens_max > MAX_GPT4_EXTENDED_TOKENS => true,
+
+            _ => false
+        };
+
+        options.tokens_max = Some(tokens_max);
+
+        if is_exceeding_max_tokens_allowed {
+            return Err(ClashingArgumentsError::new(format!(
+                r#"Max tokens "{tokens_max}" exceeds max allowed length for "{provider}""#)))?
+        }
+
+        Ok(OpenAIChatCommand {
+            options,
+        })
     }
 }
 
@@ -118,7 +151,7 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions, config: &Conf
         },
     }
 
-    options.file.write(response, options.no_context, false);
+    options.file.write(response, options.no_context, false)?;
 
     if options.completion.append.is_some() || options.completion.once.unwrap_or(false) {
         return Ok(ChatMessages::try_from(&*options)?);
@@ -128,7 +161,10 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions, config: &Conf
 }
 
 fn get_request(client: &Client, options: &ChatOptions, config: &Config, stream: bool) -> Result<RequestBuilder, ChatError> {
+    let model = format!("{}", options.provider);
     let messages = ChatMessages::try_from(options)?;
+    let max_tokens = options.tokens_max
+        .unwrap_or_else(|| get_max_tokens_for_model(options.provider));
 
     Ok(client.post("https://api.openai.com/v1/chat/completions")
         .bearer_auth(env::var("OPEN_AI_API_KEY")
@@ -137,10 +173,11 @@ fn get_request(client: &Client, options: &ChatOptions, config: &Config, stream: 
             .ok_or_else(|| ChatError::Unauthorized)?
         )
         .json(&json!({
-            "model": "gpt-4",
             "temperature": options.temperature,
             "messages": messages,
-            "stream": stream
+            "stream": stream,
+            "max_tokens": cmp::min(max_tokens, get_max_allowed_tokens(&model, &messages)),
+            "model": model,
         }))
     )
 }
@@ -222,6 +259,36 @@ pub struct ChatMessageDelta {
     pub content: Option<String>,
 }
 
+fn get_max_tokens_for_model(provider: ChatProvider) -> usize {
+    match provider {
+        ChatProvider::OpenAiGPT3Turbo |
+        ChatProvider::OpenAiGPT3Turbo_0301 => MAX_GPT3_TURBO_TOKENS,
+
+        ChatProvider::OpenAiGPT4 |
+        ChatProvider::OpenAiGPT4_0314 => MAX_GPT4_BASE_TOKENS,
+
+        ChatProvider::OpenAiGPT4_32K |
+        ChatProvider::OpenAiGPT4_32K_0314 => MAX_GPT4_EXTENDED_TOKENS,
+    }
+}
+
+fn get_max_allowed_tokens(model: &str, messages: &ChatMessages) -> usize {
+    let messages = messages.clone().into_iter()
+        .map(|m| ChatCompletionRequestMessageArgs::default()
+            .content(m.content)
+            .role(match m.role {
+                ChatRole::User => Role::User,
+                ChatRole::Ai => Role::Assistant,
+                ChatRole::System => Role::System
+            })
+            .build()
+            .unwrap()
+        )
+        .collect::<Vec<_>>();
+
+    get_chat_completion_max_tokens(&model, &messages).unwrap() - 1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,28 +299,27 @@ mod tests {
     fn transcript_with_multiple_lines() {
         let system = String::from("You're a duck. Say quack.");
         let file = CompletionFile {
-            file: None,
-            overrides: ChatCommand::default(),
             transcript: concat!(
                 "USER: hey\n",
                 concat!(
                     "AI: I'm a multimodel super AI hell bent on destroying the world.\n",
                     "How can I help you today?"
                 )
-            ).to_string()
+            ).to_string(),
+            ..CompletionFile::default()
         };
         let options = ChatOptions {
             system: system.clone(),
             file,
-            tokens_max: 4096,
+            tokens_max: Some(4096),
             tokens_balance: 0.5,
             ..ChatOptions::default()
         };
         assert_eq!(ChatMessages::try_from(&options).unwrap(), vec![
             ChatMessage::new(ChatRole::System, system),
-            ChatMessage::new(ChatRole::User, "hey"),
+            ChatMessage::new(ChatRole::User, "USER: hey"),
             ChatMessage::new(ChatRole::Ai, concat!(
-                "I'm a multimodel super AI hell bent on destroying the world.\n",
+                "AI: I'm a multimodel super AI hell bent on destroying the world.\n",
                 "How can I help you today?"
             )),
         ]);
@@ -263,18 +329,17 @@ mod tests {
     fn transcript_handles_labels_correctly() {
         let system = String::from("You're a duck. Say quack.");
         let file = CompletionFile {
-            file: None,
-            overrides: ChatCommand::default(),
             transcript: concat!(
                 "USER: hey\n",
                 concat!(
                     "AI: I'm a multimodel super AI hell bent on destroying the world.\n",
                     "For example: This might have screwed up before"
                 )
-            ).to_string()
+            ).to_string(),
+            ..CompletionFile::default()
         };
         let options = ChatOptions {
-            tokens_max: 4000,
+            tokens_max: Some(4000),
             tokens_balance: 0.5,
             system: system.clone(),
             file,
@@ -282,9 +347,9 @@ mod tests {
         };
         assert_eq!(ChatMessages::try_from(&options).unwrap(), vec![
             ChatMessage::new(ChatRole::System, system),
-            ChatMessage::new(ChatRole::User, "hey"),
+            ChatMessage::new(ChatRole::User, "USER: hey"),
             ChatMessage::new(ChatRole::Ai, concat!(
-                "I'm a multimodel super AI hell bent on destroying the world.\n",
+                "AI: I'm a multimodel super AI hell bent on destroying the world.\n",
                 "For example: This might have screwed up before"
             )),
         ]);
@@ -294,15 +359,14 @@ mod tests {
     fn transcript_labotomizes_itself() {
         let system = String::from("You're a duck. Say quack.");
         let file = CompletionFile {
-            file: None,
-            overrides: ChatCommand::default(),
             transcript: concat!(
                 "USER: hey. This is a really long message to ensure that it gets labotomized.\n",
                 "AI: hey"
-            ).to_string()
+            ).to_string(),
+            ..CompletionFile::default()
         };
         let options = ChatOptions {
-            tokens_max: 40,
+            tokens_max: Some(40),
             tokens_balance: 0.5,
             system: system.clone(),
             file,
@@ -310,19 +374,15 @@ mod tests {
         };
         assert_eq!(ChatMessages::try_from(&options).unwrap(), vec![
             ChatMessage::new(ChatRole::System, system),
-            ChatMessage::new(ChatRole::Ai, "hey"),
+            ChatMessage::new(ChatRole::Ai, "AI: hey"),
         ]);
     }
 
     #[test]
     fn streaming_strips_whitespace_and_labels_from_delta_content() {
-        let file = CompletionFile {
-            file: None,
-            overrides: ChatCommand::default(),
-            transcript: String::new()
-        };
+        let file = CompletionFile::default();
         let mut options = ChatOptions {
-            tokens_max: 40,
+            tokens_max: Some(40),
             tokens_balance: 0.5,
             prefix_ai: "AI".into(),
             file,
@@ -343,7 +403,12 @@ mod tests {
             "id": ""
         }"#);
 
-        let state = handle_stream_message(&mut options, chat_response, StreamMessageState::New)
+        let mut response = String::new();
+        let state = handle_stream_message(
+                &mut options,
+                chat_response,
+                &mut response,
+                StreamMessageState::New)
             .unwrap();
 
         assert_eq!(StreamMessageState::HasWrittenContent, state);

@@ -1,6 +1,6 @@
 [package]
 name = "ai-cli"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "A CLI tool for all things AI (generating images or audio, chatting with LLM's, you name it)"
 license = "MIT"
@@ -10,9 +10,14 @@ repository = "https://github.com/PromptProgrammingLanguage/ai"
 name = "ai"
 path = "src/lib.rs"
 
+[[bin]]
+name = "ai"
+path = "src/main.rs"
+
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-openai = "0.10.0"
 clap = { version = "4.1.4", features = ["derive"] }
 dirs = "4.0.0"
 reqwest = { version = "0.11.14", features = ["blocking", "json"] }
@@ -27,4 +32,4 @@ serde_yaml = "0.9.17"
 async-recursion = "1.0.2"
 reqwest-eventsource = "0.4.0"
 futures-util = "0.3.26"
-tiktoken-rs = "0.2.1"
+tiktoken-rs = "0.3.3"

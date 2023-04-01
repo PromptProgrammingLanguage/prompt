@@ -4,7 +4,6 @@ use serde::de::DeserializeOwned;
 use std::fs::{self,File,OpenOptions};
 use std::io::{self,Write};
 use crate::Config;
-use derive_more::Constructor;
 
 #[derive(Args, Clone, Default, Debug, Serialize, Deserialize)]
 pub struct CompletionOptions {
@@ -177,7 +176,7 @@ impl CompletionOptions {
     pub fn parse_stream_option(&self) -> Result<bool, ClashingArgumentsError> {
         match (self.quiet, self.stream) {
             (Some(true), Some(true)) => return Err(ClashingArgumentsError::new(
-                "Having both quiet and stream enabled doesn't make sense.".into()
+                "Having both quiet and stream enabled doesn't make sense."
             )),
             (Some(true), None) |
             (Some(true), Some(false)) |
@@ -218,9 +217,11 @@ impl CompletionOptions {
     }
 }
 
-#[derive(Constructor, Debug)]
-pub struct ClashingArgumentsError {
-    pub error: &'static str
+#[derive(Debug)]
+pub struct ClashingArgumentsError(String);
+
+impl ClashingArgumentsError {
+    pub fn new(error: impl Into<String>) -> Self { Self(error.into()) }
 }
 
 #[derive(Debug, Default)]
