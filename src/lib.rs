@@ -41,11 +41,18 @@ pub async fn prompt(args: PromptArgs) {
             .expect("Failed to construct http client")
     };
 
+    let prompt_dir = args.path.parent()
+        .expect("Prompt file must have a parent directory")
+        .to_path_buf();
+
+    let prompt_dir = match prompt_dir.to_str() {
+        Some("") => env::current_dir().expect("Prompt needs a current directory to run"),
+        _ => prompt_dir
+    };
+
     let config = EvaluateConfig {
         api_key,
-        prompt_dir: args.path.parent()
-            .expect("Prompt file must have a parent directory")
-            .to_path_buf(),
+        prompt_dir,
         prompt_path: args.path,
         quiet: args.quiet
     };
