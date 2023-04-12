@@ -26,7 +26,8 @@ pub use chat::{
     ChatResult,
     ChatError,
     ChatMessage,
-    ChatRole
+    ChatRole,
+    ChatProvider
 };
 pub use voice::{
     VoiceCommand,
