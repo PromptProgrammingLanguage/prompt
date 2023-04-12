@@ -8,6 +8,7 @@ use crate::openai::chat::OpenAIChatCommand;
 use crate::openai::OpenAIError;
 use crate::completion::{CompletionOptions,CompletionFile,ClashingArgumentsError};
 use crate::Config;
+use log::debug;
 
 #[derive(Args, Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ChatCommand {
@@ -249,7 +250,9 @@ impl ChatMessagesInternalExt for ChatMessages {
                         remaining = subtracted;
                         messages.push(message);
                     },
-                    None => break,
+                    None => {
+                        debug!(target: "AI chat", "Lobotomized message {:?}", message);
+                    },
                 }
             }
 

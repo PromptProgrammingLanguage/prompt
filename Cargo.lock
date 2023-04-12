@@ -21,6 +21,7 @@ dependencies = [
  "derive_more",
  "dirs",
  "futures-util",
+ "log",
  "reqwest",
  "reqwest-eventsource",
  "rustc-serialize",
