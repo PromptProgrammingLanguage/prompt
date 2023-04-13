@@ -49,6 +49,11 @@ impl TryFrom<ChatOptions> for OpenAIChatCommand {
                 r#"Max tokens "{tokens_max}" exceeds max allowed length for "{provider}""#)))?
         }
 
+        if options.stop.len() > 4 {
+            return Err(ClashingArgumentsError::new(format!(
+                r#"Cannot surpass more then 4 stops for "{provider}""#)))?
+        }
+
         Ok(OpenAIChatCommand {
             options,
         })
@@ -178,6 +183,7 @@ fn get_request(client: &Client, options: &ChatOptions, config: &Config, stream: 
             "stream": stream,
             "max_tokens": cmp::min(max_tokens, get_max_allowed_tokens(&model, &messages)),
             "model": model,
+            "stop": options.stop
         }))
     )
 }

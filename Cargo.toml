@@ -1,6 +1,6 @@
 [package]
 name = "ai-cli"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "A CLI tool for all things AI (generating images or audio, chatting with LLM's, you name it)"
 license = "MIT"

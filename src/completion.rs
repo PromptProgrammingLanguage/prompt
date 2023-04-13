@@ -55,6 +55,10 @@ pub struct CompletionOptions {
     #[arg(skip)]
     pub response_count: Option<usize>,
 
+    /// Stop tokens
+    #[arg(long)]
+    pub stop: Option<Vec<String>>,
+
     /// Stream the output to the terminal
     #[arg(long)]
     pub stream: Option<bool>,
@@ -85,6 +89,7 @@ impl CompletionOptions {
             quiet: original.quiet.or(merged.quiet),
             prefix_ai: original.prefix_ai.or(merged.prefix_ai),
             prefix_user: original.prefix_user.or(merged.prefix_user),
+            stop: original.stop.or(merged.stop),
             stream: original.stream.or(merged.stream),
             tokens_max: original.tokens_max.or(merged.tokens_max),
             tokens_balance: original.tokens_balance.or(merged.tokens_balance),
@@ -171,6 +176,13 @@ impl CompletionOptions {
         });
 
         file.unwrap_or_default()
+    }
+
+    pub fn parse_stops(&self) -> Vec<String> {
+        self.stop.iter()
+            .map(|s| s.iter().map(|s| s.split(",").map(|s| s.trim().to_string())).flatten())
+            .flatten()
+            .collect()
     }
 
     pub fn parse_stream_option(&self) -> Result<bool, ClashingArgumentsError> {

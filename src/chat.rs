@@ -64,7 +64,8 @@ pub(crate) struct ChatOptions {
     pub stream: bool,
     pub temperature: f32,
     pub tokens_max: Option<usize>,
-    pub tokens_balance: f32
+    pub tokens_balance: f32,
+    pub stop: Vec<String>
 }
 
 impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
@@ -98,6 +99,7 @@ impl TryFrom<(&ChatCommand, &Config)> for ChatOptions {
             prefix_user: completion.prefix_user.clone().unwrap_or_else(|| String::from("USER")),
             system,
             tokens_balance: completion.tokens_balance.unwrap_or(0.5),
+            stop: completion.parse_stops(),
             tokens_max: completion.tokens_max,
             completion,
             stream,
