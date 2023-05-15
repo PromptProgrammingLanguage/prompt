@@ -165,7 +165,10 @@ async fn handle_stream(client: &Client, options: &mut ChatOptions, config: &Conf
     Ok(vec![])
 }
 
+const DEFAULT_OPEN_API_URL: &'static str = "https://api.openai.com";
+
 fn get_request(client: &Client, options: &ChatOptions, config: &Config, stream: bool) -> Result<RequestBuilder, ChatError> {
+    let base_url = env::var("OPEN_AI_PROXY_URL").unwrap_or_else(|_| DEFAULT_OPEN_API_URL.into());
     let model = format!("{}", options.provider);
     let messages = ChatMessages::try_from(options)?;
     let max_tokens = options.tokens_max
@@ -182,7 +185,7 @@ fn get_request(client: &Client, options: &ChatOptions, config: &Config, stream: 
         map.insert("stop".to_string(), options.stop.clone().into());
     }
 
-     Ok(client.post("https://api.openai.com/v1/chat/completions")
+    Ok(client.post(&format!("{base_url}/v1/chat/completions"))
         .bearer_auth(env::var("OPEN_AI_API_KEY")
             .ok()
             .or_else(|| config.api_key_openai.clone())

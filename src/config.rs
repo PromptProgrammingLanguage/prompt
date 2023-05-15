@@ -13,7 +13,8 @@ pub struct Config {
     pub api_key_cohere: Option<String>,
     pub api_key_openai: Option<String>,
     pub api_key_eleven_labs: Option<String>,
-    pub dir: PathBuf
+    pub dir: PathBuf,
+    pub proxy: Option<String>
 }
 
 pub const DEFAULT_CONFIG_FILE: &str = r#"{

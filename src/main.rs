@@ -52,7 +52,8 @@ async fn main() {
         api_key_cohere: config_json.api_key_cohere,
         api_key_openai: config_json.api_key_openai,
         api_key_eleven_labs: config_json.api_key_eleven_labs,
-        dir: config_dir
+        dir: config_dir,
+        proxy: cli.proxy
     };
 
     let mut headers = HeaderMap::new();
@@ -108,6 +109,9 @@ async fn main() {
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+
+    #[arg(long)]
+    proxy: Option<String>
 }
 
 #[derive(Subcommand)]
