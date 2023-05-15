@@ -26,6 +26,11 @@ async fn main() {
         })
         .expect("Configuration directory could not be found");
 
+    if !config_dir.exists() {
+        fs::create_dir_all(&config_dir)
+            .expect("Could not create the configuration directory");
+    }
+
     let config_file = {
         let mut config_file = config_dir.clone();
         config_file.push("config.json");
