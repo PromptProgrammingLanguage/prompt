@@ -1,3 +1,4 @@
+use std::env;
 use std::fs;
 use std::path::PathBuf;
 use clap::{Args,ValueEnum};
@@ -7,6 +8,7 @@ use serde_json::json;
 use rustc_serialize::base64::FromBase64;
 use derive_more::{From,TryInto};
 use crate::openai::OpenAIError;
+use crate::Config;
 
 #[derive(Clone, Debug, Args)]
 pub struct ImageCommand {
@@ -48,12 +50,18 @@ pub type ImageResult = Result<Vec<ImageData>, ImageError>;
 #[derive(Debug, From)]
 pub enum ImageError {
     OpenAIError(OpenAIError),
-    DeserializeError(reqwest::Error)
+    DeserializeError(reqwest::Error),
+    Unauthorized
 }
 
 impl ImageCommand {
-    pub async fn run(&self, client: &Client) -> ImageResult {
+    pub async fn run(&self, client: &Client, config: &Config) -> ImageResult {
         let request = client.post("https://api.openai.com/v1/images/generations")
+            .bearer_auth(env::var("OPEN_AI_API_KEY")
+                .ok()
+                .or_else(|| config.api_key_openai.clone())
+                .ok_or_else(|| ImageError::Unauthorized)?
+            )
             .json(&json!({
                 "prompt": &self.prompt,
                 "n": self.count,
