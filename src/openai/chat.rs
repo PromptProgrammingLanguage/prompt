@@ -4,15 +4,15 @@ use crate::completion::ClashingArgumentsError;
 use crate::Config;
 use std::io::{self,Write};
 use std::env;
+use std::cmp;
 use async_recursion::async_recursion;
 use serde::{Serialize,Deserialize};
 use reqwest::{Client,RequestBuilder};
 use reqwest_eventsource::{EventSource,Event};
-use serde_json::json;
+use serde_json::{json,Map};
 use futures_util::stream::StreamExt;
 use tiktoken_rs::get_chat_completion_max_tokens;
 use async_openai::types::{ChatCompletionRequestMessageArgs, Role};
-use std::cmp;
 
 const MAX_GPT3_TURBO_TOKENS: usize = 4096;
 const MAX_GPT4_BASE_TOKENS: usize = 8192;
@@ -171,20 +171,24 @@ fn get_request(client: &Client, options: &ChatOptions, config: &Config, stream: 
     let max_tokens = options.tokens_max
         .unwrap_or_else(|| get_max_tokens_for_model(options.provider));
 
-    Ok(client.post("https://api.openai.com/v1/chat/completions")
+    let mut map = Map::new();
+    map.insert("temperature".to_string(), options.temperature.into());
+    map.insert("stream".to_string(), stream.into());
+    map.insert("max_tokens".to_string(), cmp::min(max_tokens, get_max_allowed_tokens(&model, &messages)).into());
+    map.insert("model".to_string(), model.into());
+    map.insert("messages".to_string(), serde_json::to_value(messages)?);
+
+    if options.stop.len() > 0 {
+        map.insert("stop".to_string(), options.stop.clone().into());
+    }
+
+     Ok(client.post("https://api.openai.com/v1/chat/completions")
         .bearer_auth(env::var("OPEN_AI_API_KEY")
             .ok()
             .or_else(|| config.api_key_openai.clone())
             .ok_or_else(|| ChatError::Unauthorized)?
         )
-        .json(&json!({
-            "temperature": options.temperature,
-            "messages": messages,
-            "stream": stream,
-            "max_tokens": cmp::min(max_tokens, get_max_allowed_tokens(&model, &messages)),
-            "model": model,
-            "stop": options.stop
-        }))
+        .json(&serde_json::Value::Object(map))
     )
 }
 
