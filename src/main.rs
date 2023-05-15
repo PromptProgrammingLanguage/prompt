@@ -78,7 +78,7 @@ async fn main() {
             }
         },
         Commands::Image(image) => {
-            let result = image.run(&client).await;
+            let result = image.run(&client, &config).await;
 
             match (result, image.out, image.format) {
                 (Ok(result), None, _p @ PictureFormat::Url) => {
